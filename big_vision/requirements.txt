@@ -1,0 +1,8 @@
+absl-py
+clu
+einops
+flax
+git+https://github.com/deepmind/optax.git  # Needed for decay_rate_fn in scale_by_factored_rms
+tensorflow
+tensorflow_datasets
+tensorflow-addons
