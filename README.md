@@ -1,4 +1,4 @@
-# Big Vision codebase
+# Big Vision
 
 This codebase is designed for training large-scale vision models on
 [Cloud TPU VMs](https://cloud.google.com/blog/products/compute/introducing-cloud-tpu-vms).
@@ -208,15 +208,15 @@ We provide a well-tuned ViT-S/16 baseline in the config file named
 90 epochs of training, being a strong and simple starting point for research
 on the ViT models.
 
-Please see our [arXiv note](https://TBD) for more details and if this baseline
-happens to by useful for your research, consider citing
+Please see our [arXiv note](https://arxiv.org/abs/2205.01580) for more details
+and if this baseline happens to by useful for your research, consider citing
 
 ```
-@article{big_vision,
-  url = {https://arxiv.org/abs/TBD},
+@article{vit_baseline,
+  url = {https://arxiv.org/abs/2205.01580},
   author = {Beyer, Lucas and Zhai, Xiaohua and Kolesnikov, Alexander},
-  title = {},
-  journal={arXiv preprint arXiv:TBD},
+  title = {Better plain ViT baselines for ImageNet-1k},
+  journal={arXiv preprint arXiv:2205.01580},
   year = {2022},
 }
 ```
