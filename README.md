@@ -194,7 +194,7 @@ gcloud alpha compute tpus tpu-vm ssh $NAME --zone=$ZONE --worker=all --command "
 ## Run the train script on TPU VMs
 
 To train your own big_vision models on a large dataset,
-e.g. `imagenet2012` ([prepare the TFDS dataset]((https://www.tensorflow.org/datasets/catalog/imagenet2012)),
+e.g. `imagenet2012` ([prepare the TFDS dataset](https://www.tensorflow.org/datasets/catalog/imagenet2012)),
 run the following command line.
 
 ```
@@ -233,7 +233,6 @@ the following BibTEX to cite it:
   year = {2022},
   publisher = {GitHub},
   journal = {GitHub repository},
-  doi = {TBD},
   howpublished = {\url{https://github.com/google-research/big_vision}}
 }
 ```

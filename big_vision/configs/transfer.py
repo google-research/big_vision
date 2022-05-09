@@ -21,7 +21,7 @@ ViT-Augreg-B/32:
     Dataset, crop, learning rate, mean (%), range (%)
   - ImageNet, inception_crop, 0.03, 83.27, [83.22...83.33]
   - Cifar10, resmall_crop, 0.003, 98.55, [98.46...98.6]
-  - Cifar100, resmall_crop, 0.01, 91.35, [91.09...91.16]
+  - Cifar100, resmall_crop, 0.01, 91.35, [91.09...91.62]
   - Pets, inception_crop, 0.003, 93.78, [93.62...94.00]
   - Flowers, inception_crop, 0.003, 99.43, [99.42...99.45]
 
