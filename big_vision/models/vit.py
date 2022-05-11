@@ -290,12 +290,13 @@ def fix_old_checkpoints(params):
   # This means a B/32@224px would have 7x7+1 posembs. This is useless and clumsy
   # so we changed to add posemb then concat [cls]. We can recover the old
   # checkpoint by manually summing [cls] token and its posemb entry.
-  pe = params["pos_embedding"]
-  if int(np.sqrt(pe.shape[1])) ** 2 + 1 == int(pe.shape[1]):
-    logging.info("ViT: Loading and fixing combined cls+posemb")
-    pe_cls, params["pos_embedding"] = pe[:, :1], pe[:, 1:]
-    if "cls" in params:
-      params["cls"] += pe_cls
+  if "pos_embedding" in params:
+    pe = params["pos_embedding"]
+    if int(np.sqrt(pe.shape[1])) ** 2 + 1 == int(pe.shape[1]):
+      logging.info("ViT: Loading and fixing combined cls+posemb")
+      pe_cls, params["pos_embedding"] = pe[:, :1], pe[:, 1:]
+      if "cls" in params:
+        params["cls"] += pe_cls
 
   # MAP-head variants during ViT-G development had it inlined:
   if "probe" in params:
@@ -308,8 +309,10 @@ def fix_old_checkpoints(params):
 def load(init_params, init_file, model_cfg, dont_load=()):  # pylint: disable=invalid-name because we had to CamelCase above.
   """Load init from checkpoint, both old model and this one. +Hi-res posemb."""
 
+  del model_cfg
   # Shortcut names for some canonical paper checkpoints:
   init_file = {
+      # pylint: disable=line-too-long
       # pylint: disable=line-too-long
       # Recommended models from https://arxiv.org/abs/2106.10270
       # Many more models at https://github.com/google-research/vision_transformer
@@ -320,15 +323,15 @@ def load(init_params, init_file, model_cfg, dont_load=()):  # pylint: disable=in
       "howto-i21k-B/16": "gs://vit_models/augreg/B_16-i21k-300ep-lr_0.001-aug_medium1-wd_0.1-do_0.0-sd_0.0.npz",
       "howto-i21k-B/8": "gs://vit_models/augreg/B_8-i21k-300ep-lr_0.001-aug_medium2-wd_0.1-do_0.0-sd_0.0.npz",
       "howto-i21k-L/16": "gs://vit_models/augreg/L_16-i21k-300ep-lr_0.001-aug_strong1-wd_0.1-do_0.0-sd_0.0.npz",
+
+      # Better plain vit-s16 baselines from https://arxiv.org/abs/2205.01580
+      "i1k-s16-90ep": "gs://big_vision/vit_s16_i1k_90ep.npz",
+      "i1k-s16-150ep": "gs://big_vision/vit_s16_i1k_150ep.npz",
+      "i1k-s16-300ep": "gs://big_vision/vit_s16_i1k_300ep.npz",
+      # pylint: disable=line-too-long
       # pylint: enable=line-too-long
   }.get(init_file, init_file)
   restored_params = utils.load_params(None, init_file)
-
-  # The following allows implementing both fine-tuning head variants from
-  # (internal link)
-  # depending on the value of `rep_size` in the fine-tuning job.
-  if model_cfg.get("rep_size", False) in (None, False):
-    restored_params.pop("pre_logits", None)
 
   fix_old_checkpoints(restored_params)
 
@@ -336,8 +339,9 @@ def load(init_params, init_file, model_cfg, dont_load=()):  # pylint: disable=in
   restored_params = common.merge_params(restored_params, init_params, dont_load)
 
   # resample posemb if needed.
-  restored_params["pos_embedding"] = resample_posemb(
-      old=restored_params["pos_embedding"],
-      new=init_params["pos_embedding"])
+  if "pos_embedding" in init_params:
+    restored_params["pos_embedding"] = resample_posemb(
+        old=restored_params["pos_embedding"],
+        new=init_params["pos_embedding"])
 
   return restored_params

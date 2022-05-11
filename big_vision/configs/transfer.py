@@ -42,10 +42,15 @@ def _set_model(config, model):
   config.model_load = dict(dont_load=['head/kernel', 'head/bias'])
 
   if model == 'vit-i21k-augreg-b/32':
-    # Load "recommented" upstream B/32 from https://arxiv.org/abs/2106.10270
+    # Load "recommended" upstream B/32 from https://arxiv.org/abs/2106.10270
     config.model_name = 'vit'
     config.model_init = 'howto-i21k-B/32'
     config.model = dict(variant='B/32', pool_type='tok')
+  elif model == 'vit-s16':
+    config.model_name = 'vit'
+    config.model_init = 'i1k-s16-300ep'
+    config.model = dict(variant='S/16', pool_type='gap', posemb='sincos2d',
+                        rep_size=True)
   else:
     raise ValueError(f'Unknown model: {model}, please define customized model.')
 
