@@ -60,39 +60,35 @@ def bit_paper(config):
   config.model_init = 'M-imagenet2012'  # M = i21k, -imagenet2012 = fine-tuned
   config.model = dict(width=1, depth=50)
 
-  config.evals = [
-      ('fewshot', 'fewshot_lsr'),
-      ('test', 'classification'),
-      ('real', 'classification'),
-      ('v2', 'classification'),
-  ]
-  config.fewshot = get_fewshot_lsr()
+  config.evals = {}
+  config.evals.fewshot = get_fewshot_lsr()
+
   pp_clf = (
       'decode|resize(384)|value_range(-1, 1)'
       '|onehot(1000, key="{lbl}", key_result="labels")'
       '|keep("image", "labels")'
   )
-  config.test = dict(
-      dataset='imagenet2012_real',
-      split='validation',
-      pp_fn=pp_clf.format(lbl='original_label'),
+  common_clf = dict(
+      type='classification',
       loss_name='softmax_xent',
       cache_final=False,  # Only run once, on low-mem machine.
-  )
-  config.real = dict(
       dataset='imagenet2012_real',
       split='validation',
-      pp_fn=pp_clf.format(lbl='real_label'),
-      loss_name='sigmoid_xent',
-      cache_final=False,  # Only run once, on low-mem machine.
   )
-  config.v2 = dict(
-      dataset='imagenet_v2',
-      split='test',
-      pp_fn=pp_clf.format(lbl='label'),
-      loss_name='softmax_xent',
-      cache_final=False,  # Only run once, on low-mem machine.
-  )
+  config.evals.test = {
+      **common_clf,
+      'pp_fn': pp_clf.format(lbl='original_label'),
+  }
+  config.evals.real = {
+      **common_clf,
+      'pp_fn': pp_clf.format(lbl='real_label'),
+  }
+  config.evals.v2 = {
+      **common_clf,
+      'dataset': 'imagenet_v2',
+      'split': 'test',
+      'pp_fn': pp_clf.format(lbl='label'),
+  }
 
 
 def vit_i1k(config):
@@ -106,12 +102,10 @@ def vit_i1k(config):
   config.model = dict(variant='S/16', pool_type='gap', posemb='sincos2d',
                       rep_size=True)
 
-  config.evals = [
-      ('fewshot', 'fewshot_lsr'),
-      ('val', 'classification'),
-  ]
-  config.fewshot = get_fewshot_lsr()
-  config.val = dict(
+  config.evals = {}
+  config.evals.fewshot = get_fewshot_lsr()
+  config.evals.val = dict(
+      type='classification',
       dataset='imagenet2012',
       split='validation',
       pp_fn='decode|resize_small(256)|central_crop(224)|value_range(-1, 1)|onehot(1000, key="label", key_result="labels")|keep("image", "labels")',
@@ -130,12 +124,10 @@ def vit_i21k(config):
   config.model_init = ''  # Will be set in sweep.
   config.model = dict(variant='B/32', pool_type='tok')
 
-  config.evals = [
-      ('fewshot', 'fewshot_lsr'),
-      ('val', 'classification'),
-  ]
-  config.fewshot = get_fewshot_lsr()
-  config.val = dict(
+  config.evals = {}
+  config.evals.fewshot = get_fewshot_lsr()
+  config.evals.val = dict(
+      type='classification',
       dataset='imagenet21k',
       split='full[:51200]',
       pp_fn='decode|resize_small(256)|central_crop(224)|value_range(-1, 1)|onehot(21843)|keep("image", "labels")',

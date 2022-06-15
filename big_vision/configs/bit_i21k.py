@@ -44,8 +44,6 @@ def get_config():
   config.shuffle_buffer_size = 250_000  # Per host, so small-ish is ok.
 
   config.log_training_steps = 50
-  config.log_eval_steps = 1000
-  # NOTE: eval is very fast O(seconds) so it's fine to run it often.
   config.checkpoint_steps = 1000
 
   # Model section
@@ -62,24 +60,18 @@ def get_config():
   config.schedule = dict(decay_type='cosine', warmup_steps=5000)
 
   # Eval section
-  config.evals = [
-      ('val', 'classification'),
-      ('test', 'classification'),
-      ('fewshot', 'fewshot_lsr'),
-  ]
-
   eval_common = dict(
+      type='classification',
       dataset=config.dataset,
       pp_fn=pp_eval,
       loss_name=config.loss,
-      log_steps=1000,
+      log_steps=1000,  # Very fast O(seconds) so it's fine to run it often.
   )
-  config.val = dict(**eval_common)
-  config.val.split = 'full[25600:51200]'
-  config.test = dict(**eval_common)
-  config.test.split = 'full[:25600]'
-
-  config.fewshot = get_fewshot_lsr()
-  config.fewshot.log_steps = 25_000
+  config.evals = {}
+  config.evals.test = {**eval_common, 'split': 'full[:25_600]'}
+  config.evals.val = {**eval_common, 'split': 'full[25_600:51_200]'}
+  config.evals.train = {**eval_common, 'split': 'full[51_200:76_800]'}
+  config.evals.fewshot = get_fewshot_lsr()
+  config.evals.fewshot.log_steps = 25_000
 
   return config

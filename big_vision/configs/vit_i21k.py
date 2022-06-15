@@ -83,7 +83,6 @@ def get_config(arg=None):
   config.prefetch_to_device = 4
 
   config.log_training_steps = 50
-  config.log_eval_steps = 1000
   config.checkpoint_steps = 1000
 
   # Model section
@@ -102,30 +101,25 @@ def get_config(arg=None):
   config.mixup = MIXUP_DEF[aug_setting]
 
   # Eval section
-  config.evals = [
-      ('val', 'classification'),
-      ('test', 'classification'),
-      ('fewshot', 'fewshot_lsr'),
-  ]
-
   eval_common = dict(
       dataset=config.dataset,
       pp_fn=pp_eval,
       loss_name=config.loss,
-      log_steps=1000,
+      log_steps=1000,  # Very fast O(seconds) so it's fine to run it often.
   )
-  config.val = dict(**eval_common)
-  config.val.split = 'full[25600:51200]'
-  config.test = dict(**eval_common)
-  config.test.split = 'full[:25600]'
-
-  config.fewshot = get_fewshot_lsr()
-  config.fewshot.log_steps = 10_000
+  config.evals = {}
+  config.evals.test = {**eval_common, 'split': 'full[:25_600]'}
+  config.evals.val = {**eval_common, 'split': 'full[25_600:51_200]'}
+  config.evals.train = {**eval_common, 'split': 'full[51_200:76_800]'}
+  config.evals.fewshot = get_fewshot_lsr(runlocal=arg.runlocal)
+  config.evals.fewshot.log_steps = 10_000
 
   # Make a few things much smaller for quick local debugging testruns.
   if arg.runlocal:
     config.shuffle_buffer_size = 10
     config.batch_size = 8
-    config.val.split = 'full[:16]'
+    config.evals.test.split = 'full[:16]'
+    config.evals.train.split = 'full[:16]'
+    config.evals.val.split = 'full[:16]'
 
   return config

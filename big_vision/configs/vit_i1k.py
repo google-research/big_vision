@@ -102,7 +102,6 @@ def get_config(arg=None):
   config.prefetch_to_device = 4
 
   config.log_training_steps = 50
-  config.log_eval_steps = 1000
   config.checkpoint_steps = 1000
 
   # Model section
@@ -132,38 +131,25 @@ def get_config(arg=None):
   config.mixup = MIXUP_DEF[aug_setting]
 
   # Eval section
-  config.evals = [
-      ('minival', 'classification'),
-      ('val', 'classification'),
-      ('real', 'classification'),
-      ('v2', 'classification'),
-      ('fewshot', 'fewshot_lsr'),
-  ]
-
   eval_common = dict(
+      type='classification',
+      dataset='imagenet2012',
       pp_fn=pp.format(lbl='label'),
       loss_name=config.loss,
-      log_steps=1000,
+      log_steps=2500,  # Very fast O(seconds) so it's fine to run it often.
   )
+  config.evals = {}
+  config.evals.train = {**eval_common, 'split': 'train[:2%]'}
+  config.evals.minival = {**eval_common, 'split': 'train[99%:]'}
+  config.evals.val = {**eval_common, 'split': 'validation'}
+  config.evals.v2 = {**eval_common, 'dataset': 'imagenet_v2', 'split': 'test'}
 
-  config.minival = dict(**eval_common)
-  config.minival.dataset = 'imagenet2012'
-  config.minival.split = 'train[99%:]'
+  config.evals.real = {**eval_common}
+  config.evals.real.dataset = 'imagenet2012_real'
+  config.evals.real.split = 'validation'
+  config.evals.real.pp_fn = pp.format(lbl='real_label')
 
-  config.val = dict(**eval_common)
-  config.val.dataset = 'imagenet2012'
-  config.val.split = 'validation'
-
-  config.real = dict(**eval_common)
-  config.real.dataset = 'imagenet2012_real'
-  config.real.split = 'validation'
-  config.real.pp_fn = pp.format(lbl='real_label')
-
-  config.v2 = dict(**eval_common)
-  config.v2.dataset = 'imagenet_v2'
-  config.v2.split = 'test'
-
-  config.fewshot = get_fewshot_lsr()
+  config.fewshot = get_fewshot_lsr(runlocal=arg.runlocal)
   config.fewshot.log_steps = 10_000
 
   # Make a few things much smaller for quick local debugging testruns.

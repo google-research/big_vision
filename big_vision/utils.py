@@ -17,6 +17,7 @@
 import collections
 import contextlib
 import dataclasses
+import functools
 import io
 import json
 import multiprocessing
@@ -35,6 +36,7 @@ import flax
 import flax.jax_utils as flax_utils
 import jax
 import jax.numpy as jnp
+import ml_collections as mlc
 import numpy as np
 
 import tensorflow.io.gfile as gfile
@@ -552,6 +554,21 @@ def tree_map_with_regex(f, tree, regex_rules, not_f=lambda x: x, name=None):
   return tree_map_with_names(_f, tree)
 
 
+def tree_get(tree, name):
+  """Get an entry of pytree by flattened key name, eg a/b/c, with nice error."""
+  # Turn into configdict to use its "did you mean?" error message!
+  flattened = mlc.ConfigDict(dict(tree_flatten_with_names(tree)[0]))
+  try:
+    return flattened[name]
+  except KeyError as e:
+    class Msg(str):  # Reason: https://stackoverflow.com/a/70114007/2366315
+      def __repr__(self):
+        return str(self)
+    msg = "\n".join(["Available keys:", *flattened, ""])
+    msg = flattened._generate_did_you_mean_message(name, msg)  # pylint: disable=protected-access
+    raise KeyError(Msg(msg)) from e
+
+
 def recover_dtype(a):
   """Numpy's `save` stores bfloat16 type as "void" type, so we recover it."""
   if hasattr(a, "dtype") and a.dtype.type is np.void:
@@ -654,6 +671,10 @@ def create_learning_rate_schedule(
   assert bool(cooldown_epochs) + bool(cooldown_steps) < 2, "Only one!"
   if warmup_epochs:
     warmup_steps = warmup_epochs * steps_per_epoch
+  # Early catch hard to backtrack errors due to warmup_steps >= total_steps,
+  # but let it run for 0 and 1 steps used to eval and debug runs.
+  assert (total_steps <= 1) or (warmup_steps < total_steps), (
+      "warmup_steps is >= total_steps")
   if cooldown_epochs:
     cooldown_steps = cooldown_epochs * steps_per_epoch
 

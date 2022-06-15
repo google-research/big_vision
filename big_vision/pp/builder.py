@@ -35,8 +35,8 @@ def _remove_tpu_dtypes(data):
     if v.dtype in TPU_SUPPORTED_DTYPES:
       return True
     tf.logging.warning(
-        "Removing key '{}' from data dict because its dtype {} is not in the "
-        "supported dtypes: {}".format(k, v.dtype, TPU_SUPPORTED_DTYPES))
+        "Removing key '%s' from data dict because its dtype %s is not in the "
+        "supported dtypes: %s", k, v.dtype, TPU_SUPPORTED_DTYPES)
     return False
 
   return {
@@ -57,7 +57,7 @@ def get_preprocess_fn(pp_pipeline, remove_tpu_dtypes=True, log_data=True):
   where each function can optionally have one or more arguments, which are
   either positional or key/value, as dictated by the `fn`.
 
-  The output preprocessing function expects a dictinary as input. This
+  The output preprocessing function expects a dictionary as input. This
   dictionary should have a key "image" that corresponds to a 3D tensor
   (height x width x channel).
 
@@ -88,16 +88,16 @@ def get_preprocess_fn(pp_pipeline, remove_tpu_dtypes=True, log_data=True):
   def _preprocess_fn(data):
     """The preprocessing function that is returned."""
 
-    # Validate input
-    if not isinstance(data, dict):
-      raise ValueError("Argument `data` must be a dictionary, "
-                       "not %s" % str(type(data)))
-
     # Apply all the individual steps in sequence.
     if log_data:
       logging.info("Data before pre-processing:\n%s", data)
     for op in ops:
       data = op(data)
+
+    # Validate input
+    if not isinstance(data, dict):
+      raise ValueError("Argument `data` must be a dictionary, "
+                       "not %s" % str(type(data)))
 
     if remove_tpu_dtypes:
       # Remove data that are TPU-incompatible (e.g. filename of type tf.string).

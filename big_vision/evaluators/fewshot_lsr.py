@@ -18,6 +18,7 @@ import functools
 
 import big_vision.input_pipeline as input_pipeline
 import big_vision.pp.builder as pp_builder
+import big_vision.utils as u
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -130,7 +131,7 @@ class Evaluator:
     @functools.partial(jax.pmap, axis_name="batch")
     def _repr_fn(params, batch, labels, mask):
       _, out = predict_fn(params, **batch)
-      rep = out[representation_layer]
+      rep = u.tree_get(out, representation_layer)
       rep = jax.lax.all_gather(rep, "batch")
       labels = jax.lax.all_gather(labels, "batch")
       mask = jax.lax.all_gather(mask, "batch")
@@ -147,13 +148,11 @@ class Evaluator:
       train_ds, batches_tr = input_pipeline.make_for_inference(
           dataset=dataset,
           split=train_split,
-          data_dir=None,
           batch_size=self.batch_size,
           preprocess_fn=pp_builder.get_preprocess_fn(self.pp_tr))
       test_ds, batches_te = input_pipeline.make_for_inference(
           dataset=dataset,
           split=test_split,
-          data_dir=None,
           batch_size=self.batch_size,
           preprocess_fn=pp_builder.get_preprocess_fn(self.pp_te))
       num_classes = tfds.builder(dataset).info.features["label"].num_classes

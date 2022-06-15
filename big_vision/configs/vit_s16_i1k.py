@@ -55,7 +55,6 @@ def get_config():
   pp_eval = 'decode|resize_small(256)|central_crop(224)' + pp_common
 
   config.log_training_steps = 50
-  config.log_eval_steps = 1000
   config.checkpoint_steps = 1000
 
   # Model section
@@ -79,34 +78,22 @@ def get_config():
   config.mixup = dict(p=0.2, fold_in=None)
 
   # Eval section
-  config.evals = [
-      ('minival', 'classification'),
-      ('val', 'classification'),
-      ('real', 'classification'),
-      ('v2', 'classification'),
-  ]
-
   eval_common = dict(
+      type='classification',
+      dataset='imagenet2012',
       pp_fn=pp_eval.format(lbl='label'),
       loss_name=config.loss,
-      log_steps=1000,
+      log_steps=2500,  # Very fast O(seconds) so it's fine to run it often.
   )
+  config.evals = {}
+  config.evals.train = {**eval_common, 'split': 'train[:2%]'}
+  config.evals.minival = {**eval_common, 'split': 'train[99%:]'}
+  config.evals.val = {**eval_common, 'split': 'validation'}
+  config.evals.v2 = {**eval_common, 'dataset': 'imagenet_v2', 'split': 'test'}
 
-  config.minival = dict(**eval_common)
-  config.minival.dataset = 'imagenet2012'
-  config.minival.split = 'train[99%:]'
-
-  config.val = dict(**eval_common)
-  config.val.dataset = 'imagenet2012'
-  config.val.split = 'validation'
-
-  config.real = dict(**eval_common)
-  config.real.dataset = 'imagenet2012_real'
-  config.real.split = 'validation'
-  config.real.pp_fn = pp_eval.format(lbl='real_label')
-
-  config.v2 = dict(**eval_common)
-  config.v2.dataset = 'imagenet_v2'
-  config.v2.split = 'test'
+  config.evals.real = dict(**eval_common)
+  config.evals.real.dataset = 'imagenet2012_real'
+  config.evals.real.split = 'validation'
+  config.evals.real.pp_fn = pp_eval.format(lbl='real_label')
 
   return config

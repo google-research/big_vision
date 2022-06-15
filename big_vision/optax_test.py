@@ -332,7 +332,8 @@ class OptaxTest(parameterized.TestCase):
     adafactor_state = bv_optax.find_states(opt_state, optax.FactoredState)
     n_state_params = sum(
         jax.tree_flatten(
-            jax.tree_map(lambda x: np.prod(x.shape), adafactor_state))[0])
+            jax.tree_map(lambda x: np.prod(
+                x.shape if hasattr(x, "shape") else 0), adafactor_state))[0])
     self.assertEqual(n_state_params, 2 * 1024 + 2)
 
 

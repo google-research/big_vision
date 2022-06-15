@@ -80,6 +80,7 @@ def make(config, params, *, sched_kw):
   # Optimizer updates.
   tx_func = operator.attrgetter(config.optax_name)(optax)
   opt_txs = [optax.masked(tx_func(**config.get("optax", {})), not_frozen_mask)]
+  assert "optim" not in config, "Deprecated option, use config.optax."
 
   # Learning rate multipliers. Defaults to 1.0.
   lr_mult_txs = [optax.scale(config.lr)]
@@ -96,7 +97,7 @@ def make(config, params, *, sched_kw):
   # Weight decay is not gradient-based but insted uses "params side-input".
   # Hence, weight decay is additive and independent of previous gradient-based
   # updates.
-  assert "weight_decay" not in config
+  assert "weight_decay" not in config, "Deprecated option. Use wd and schedule."
   assert config.get("weight_decay_decouple", True), (
       "Coupled weight decay not supported anymore.")
   if config.get("wd"):

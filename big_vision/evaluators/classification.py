@@ -13,7 +13,7 @@
 # limitations under the License.
 
 """Evaluator for the classfication task."""
-from functools import partial
+from functools import partial, lru_cache
 
 import big_vision.input_pipeline as input_pipeline
 import big_vision.pp.builder as pp_builder
@@ -24,48 +24,51 @@ import jax.numpy as jnp
 import numpy as np
 
 
+# To avoid re-compiling the function for every new instance of the same
+# evaluator on a different dataset!
+@lru_cache(None)
+def get_eval_fn(predict_fn, loss_name):
+  """Produces eval function, also applies pmap."""
+  @partial(jax.pmap, axis_name='batch')
+  def _eval_fn(params, batch, labels, mask):
+    logits, _ = predict_fn(params, **batch)
+
+    # Ignore the entries with all zero labels for evaluation.
+    mask *= labels.max(axis=1)
+
+    losses = getattr(u, loss_name)(
+        logits=logits, labels=labels, reduction=False)
+    loss = jax.lax.psum(losses * mask, axis_name='batch')
+
+    top1_idx = jnp.argmax(logits, axis=1)
+    # Extracts the label at the highest logit index for each image.
+    top1_correct = jnp.take_along_axis(
+        labels, top1_idx[:, None], axis=1)[:, 0]
+    ncorrect = jax.lax.psum(top1_correct * mask, axis_name='batch')
+    n = jax.lax.psum(mask, axis_name='batch')
+    return ncorrect, loss, n
+  return _eval_fn
+
+
 class Evaluator:
   """Classification evaluator."""
 
   def __init__(self, predict_fn, dataset, split, pp_fn, batch_size, loss_name,
                data_dir=None, cache_final=True, cache_raw=False, prefetch=1,
-               label_key='labels', mask_key='_mask'):
+               label_key='labels'):
     pp_fn = pp_builder.get_preprocess_fn(pp_fn)
     self.ds, self.steps = input_pipeline.make_for_inference(
-        dataset, split, data_dir, pp_fn, batch_size,
+        dataset, split, pp_fn, batch_size, data_dir,
         cache_final=cache_final, cache_raw=cache_raw)
     self.data_iter = input_pipeline.start_input_pipeline(self.ds, prefetch)
-    self.eval_fn = self.get_eval_fn(predict_fn, loss_name)
+    self.eval_fn = get_eval_fn(predict_fn, loss_name)
     self.label_key = label_key
-    self.mask_key = mask_key
-
-  def get_eval_fn(self, predict_fn, loss_name):
-    """Produces eval function, also applies pmap."""
-    @partial(jax.pmap, axis_name='batch')
-    def _eval_fn(params, batch, labels, mask):
-      logits, _ = predict_fn(params, **batch)
-
-      # Ignore the entries with all zero labels for evaluation.
-      mask *= labels.max(axis=1)
-
-      losses = getattr(u, loss_name)(
-          logits=logits, labels=labels, reduction=False)
-      loss = jax.lax.psum(losses * mask, axis_name='batch')
-
-      top1_idx = jnp.argmax(logits, axis=1)
-      # Extracts the label at the highest logit index for each image.
-      top1_correct = jnp.take_along_axis(
-          labels, top1_idx[:, None], axis=1)[:, 0]
-      ncorrect = jax.lax.psum(top1_correct * mask, axis_name='batch')
-      n = jax.lax.psum(mask, axis_name='batch')
-      return ncorrect, loss, n
-    return _eval_fn
 
   def run(self, params):
     """Computes all metrics."""
     ncorrect, loss, nseen = 0, 0, 0
     for _, batch in zip(range(self.steps), self.data_iter):
-      labels, mask = batch.pop(self.label_key), batch.pop(self.mask_key)
+      labels, mask = batch.pop(self.label_key), batch.pop('_mask')
       batch_ncorrect, batch_losses, batch_n = self.eval_fn(
           params, batch, labels, mask)
       # All results are a replicated array shaped as follows:

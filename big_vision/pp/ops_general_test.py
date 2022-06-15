@@ -15,7 +15,6 @@
 """Tests for ops_general."""
 
 import copy
-import io
 
 import big_vision.pp.ops_general as pp
 import numpy as np
@@ -100,6 +99,13 @@ class PreprocessOpsTest(tf.test.TestCase):
         self.assertEqual(
             tf.reduce_sum(out["x"]),
             2 * np.product(input_shape) - np.product(desired_shape))
+
+  def test_flatten(self):
+    d = {"a": {"b": tf.constant([1, 2, 3])}, "c": "str"}
+    self.assertEqual(pp.get_flatten()(d), {
+        "a/b": tf.constant([1, 2, 3]),
+        "c": "str"
+    })
 
 if __name__ == "__main__":
   tf.test.main()

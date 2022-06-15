@@ -18,7 +18,7 @@ This is a basic variant of a training loop, good starting point for fancy ones.
 """
 from functools import partial
 import importlib
-import multiprocessing
+import multiprocessing.pool
 import os
 
 from absl import app
@@ -31,16 +31,11 @@ import big_vision.pp.builder as pp_builder
 import big_vision.utils as u
 from clu import parameter_overview
 import flax
-import flax.jax_utils as flax_utils
 import jax
-import jax.config
-import jax.nn
 import jax.numpy as jnp
-import jax.profiler
 from ml_collections import config_flags
 import numpy as np
 import optax
-import tensorflow as tf  # pylint: disable=unused-import (for ThreadPool, weird)
 import tensorflow.io.gfile as gfile
 
 # pylint: disable=logging-fstring-interpolation
@@ -264,15 +259,15 @@ def main(argv):
   prof = None  # Keeps track of start/stop of profiler state.
 
   write_note(f"Replicating...\n{chrono.note}")
-  params_repl = flax_utils.replicate(params_cpu)
-  opt_repl = flax_utils.replicate(opt_cpu)
+  params_repl = flax.jax_utils.replicate(params_cpu)
+  opt_repl = flax.jax_utils.replicate(opt_cpu)
 
   evaluators = eval_common.from_config(
-      config, predict_fn, config.batch_size,
+      config, {"predict": predict_fn},
       lambda s: write_note(f"Initializing evaluator: {s}...\n{chrono.note}"))
 
   rng, rng_loop = jax.random.split(rng, 2)
-  rngs_loop = flax_utils.replicate(rng_loop)
+  rngs_loop = flax.jax_utils.replicate(rng_loop)
   checkpoint_writer = None
 
   write_note(f"First step compilations...\n{chrono.note}")

@@ -91,7 +91,7 @@ def make_for_train(
 # Andreas Steiner and also implemented by him in the clu library:
 # https://github.com/google/CommonLoopUtils/blob/84b777c42dfd3fb6685537138433bfeb5241a006/clu/deterministic_data.py#L304.
 def make_for_inference(
-    dataset, split, data_dir, preprocess_fn, batch_size,
+    dataset, split, preprocess_fn, batch_size, data_dir=None,
     cache_raw=False, cache_final=False):
   """Makes an input pipeline for inference."""
   data, _ = get_dataset_tfds(dataset=dataset, split=split,

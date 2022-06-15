@@ -105,19 +105,17 @@ def _set_task(config, dataset, train, val, test, n_cls,
 
   pp = f'decode|resize_small({h_res})|central_crop({l_res})' + pp_common
   config.num_classes = n_cls
-  config.evals = [('val', 'classification'),
-                  ('test', 'classification')]
 
   eval_common = dict(
+      type='classification',
       dataset=dataset,
       loss_name='softmax_xent',
       log_steps=100,
       pp_fn=pp,
   )
-  config.val = dict(**eval_common)
-  config.val.split = val
-  config.test = dict(**eval_common)
-  config.test.split = test
+  config.evals = {}
+  config.evals.val = dict(**eval_common, split=val)
+  config.evals.test = dict(**eval_common, split=test)
 
 
 def _set_imagenet_variants(config, h_res=448, l_res=384):
@@ -126,30 +124,25 @@ def _set_imagenet_variants(config, h_res=448, l_res=384):
         '|value_range(-1, 1)|onehot(1000, key="{lbl}", key_result="labels")|'
         'keep("image", "labels")'
         )
-  config.evals = [
-      ('minival', 'classification'),
-      ('val', 'classification'),
-      ('real', 'classification'),
-      ('v2', 'classification'),
-  ]
 
   # Special-case rename for i1k (val+test -> minival+val)
-  config.minival, config.val = config.val, config.test
-  del config.test
+  config.evals.minival = config.evals.val
+  config.evals.val = config.evals.test
+  # NOTE: keep test == val for convenience in flatboards.
 
-  config.real = dict()
-  config.real.dataset = 'imagenet2012_real'
-  config.real.split = 'validation'
-  config.real.pp_fn = pp.format(lbl='real_label')
-  config.real.loss_name = config.loss
-  config.real.log_steps = 100
+  config.evals.real = dict(type='classification')
+  config.evals.real.dataset = 'imagenet2012_real'
+  config.evals.real.split = 'validation'
+  config.evals.real.pp_fn = pp.format(lbl='real_label')
+  config.evals.real.loss_name = config.loss
+  config.evals.real.log_steps = 100
 
-  config.cls_v2 = dict()
-  config.cls_v2.dataset = 'imagenet_v2'
-  config.cls_v2.split = 'test'
-  config.cls_v2.pp_fn = pp.format(lbl='label')
-  config.cls_v2.loss_name = config.loss
-  config.cls_v2.log_steps = 100
+  config.evals.v2 = dict(type='classification')
+  config.evals.v2.dataset = 'imagenet_v2'
+  config.evals.v2.split = 'test'
+  config.evals.v2.pp_fn = pp.format(lbl='label')
+  config.evals.v2.loss_name = config.loss
+  config.evals.v2.log_steps = 100
 
 
 def get_config(arg=None):
@@ -162,7 +155,6 @@ def get_config(arg=None):
   config.shuffle_buffer_size = 50_000 if not arg.runlocal else 100
 
   config.log_training_steps = 10
-  config.log_eval_steps = 100  # It's very fast, frequent is ok.
   config.checkpoint_steps = 1000
   config.checkpoint_timeout = 600
 

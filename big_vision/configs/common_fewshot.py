@@ -17,13 +17,11 @@
 import ml_collections as mlc
 
 
-def get_fewshot_lsr(batch_size=None,
-                    target_resolution=224, resize_resolution=256,
+def get_fewshot_lsr(target_resolution=224, resize_resolution=256,
                     runlocal=False):
   """Returns a standard-ish fewshot eval configuration."""
   config = mlc.ConfigDict()
-  if batch_size:
-    config.batch_size = batch_size
+  config.type = 'fewshot_lsr'
   config.representation_layer = 'pre_logits'
   config.log_steps = 25_000
   config.datasets = {

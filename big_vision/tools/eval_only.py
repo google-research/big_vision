@@ -106,7 +106,7 @@ def main(argv):
     return out[0], out[-1]
 
   evaluators = eval_common.from_config(
-      config, predict_fn, config.get("batch_size_eval"),
+      config, {"predict": predict_fn, "model": model},
       lambda s: write_note(f"Initializing evaluator: {s}..."))
 
   mw.step_start(0)

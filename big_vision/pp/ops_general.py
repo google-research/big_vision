@@ -21,6 +21,7 @@ dictionary.
 
 from big_vision.pp import utils
 from big_vision.pp.registry import Registry
+import big_vision.utils as bv_utils
 import jax
 import numpy as np
 import tensorflow as tf
@@ -214,3 +215,14 @@ def get_pad_to_shape(shape, pad_value=0):
     return tf.pad(x, paddings, constant_values=tf.constant(pad_value, x.dtype))
 
   return _pad_to_shape
+
+
+@Registry.register("preprocess_ops.flatten")
+def get_flatten():
+  """Flattens the keys of data with separator '/'."""
+
+  def flatten(data):
+    flat, _ = bv_utils.tree_flatten_with_names(data)
+    return dict(flat)
+
+  return flatten

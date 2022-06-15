@@ -33,10 +33,10 @@ def merge_params(loaded, inited, dont_load=()):
 
   Returns:
     If successful, a new pytree which matches the structure of `init`
-    but contains values from `loaded`, except for `ok_to_miss`.
+    but contains values from `loaded`, except for `dont_load`.
 
-    If structures don't match and mismatches are not covered by `ok_to_*`
-    arguments, then raises an exception with more information.
+    If structures don't match and mismatches are not covered by regexes in
+    `dont_load` argument, then raises an exception with more information.
   """
   dont_load = u.check_and_compile_patterns(dont_load)
 
