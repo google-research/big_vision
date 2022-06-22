@@ -33,7 +33,8 @@ codebase:
   Xiaohua Zhai*, Thomas Unterthiner, Mostafa Dehghani, Matthias Minderer,
   Georg Heigold, Sylvain Gelly, Jakob Uszkoreit, and Neil Houlsby*
 - [Scaling Vision Transformers](https://arxiv.org/abs/2106.04560), by
-  Xiaohua Zhai*, Alexander Kolesnikov*, Neil Houlsby, and Lucas Beyer*
+  Xiaohua Zhai*, Alexander Kolesnikov*, Neil Houlsby, and Lucas Beyer*\
+  Resources: [config](configs/proj/scaling_laws/train_vit_g.py).
 - [How to train your ViT? Data, Augmentation, and Regularization in Vision Transformers](https://arxiv.org/abs/2106.10270), by
   Andreas Steiner*, Alexander Kolesnikov*, Xiaohua Zhai*, Ross Wightman,
   Jakob Uszkoreit, and Lucas Beyer*
@@ -41,6 +42,11 @@ codebase:
   Ilya Tolstikhin*, Neil Houlsby*, Alexander Kolesnikov*, Lucas Beyer*,
   Xiaohua Zhai, Thomas Unterthiner, Jessica Yung, Andreas Steiner,
   Daniel Keysers, Jakob Uszkoreit, Mario Lucic, Alexey Dosovitskiy
+- [Better plain ViT baselines for ImageNet-1k](https://arxiv.org/abs/2205.01580), by
+  Lucas Beyer, Xiaohua Zhai, Alexander Kolesnikov\
+  Resources: [config](big_vision/configs/vit_s16_i1k.py)
+- [UViM: A Unified Modeling Approach for Vision with Learned Guiding Codes](https://arxiv.org/abs/2205.10337), by
+  Alexander Kolesnikov*, André Susano Pinto*, Lucas Beyer*, Xiaohua Zhai*, Jeremiah Harmsen*, Neil Houlsby*
 
 ### Multimodal research
 - [LiT: Zero-Shot Transfer with Locked-image Text Tuning](https://arxiv.org/abs/2111.07991), by
@@ -50,7 +56,8 @@ codebase:
 ### Knowledge distillation
 - [Knowledge distillation: A good teacher is patient and consistent](https://arxiv.org/abs/2106.05237), by
   Lucas Beyer*, Xiaohua Zhai*, Amélie Royer*, Larisa Markeeva*, Rohan Anil,
-  and Alexander Kolesnikov*
+  and Alexander Kolesnikov*\
+  Resources: [README](big_vision/configs/proj/distill/README.md), [trainer](big_vision/trainers/proj/distill/distill.py), [colab](https://colab.research.google.com/drive/1nMykzUzsfQ_uAxfj3k35DYsATnG_knPl?usp=sharing).
 
 ### Misc
 - [Are we done with ImageNet?](https://arxiv.org/abs/2006.07159), by
@@ -90,10 +97,18 @@ gcloud alpha compute tpus tpu-vm ssh $NAME --zone=$ZONE --worker=all
 
 See instructions below for more details on how to use Google Cloud TPUs.
 
+All runs write checkpoints and logfiles. The logfiles are a list of JSON
+objects, and we provide an short and straightforward [example colab to read
+and display the logs and checkpoints](https://colab.research.google.com/drive/1R_lvV542WUp8Q2y8sbyooZOGCplkn7KI?usp=sharing).
+
 # Current and future contents
 
 The first release contains the core part of pre-training, transferring, and
 evaluating classification models at scale on Cloud TPU VMs.
+
+We have since added the following key features and projects:
+- Patient and consistent distillation.
+- Scaling ViT.
 
 Features and projects we plan to release in the near future, in no particular
 order:
@@ -101,7 +116,7 @@ order:
 - MLP-Mixer.
 - Loading misc public models used in our publications (NFNet, MoCov3, DINO).
 - Contrastive Image-Text model training and evaluation as in LiT and CLIP.
-- "Patient and consistent" distillation.
+- UViM.
 - Memory-efficient Polyak-averaging implementation.
 - Advanced JAX compute and memory profiling. We are using internal tools for
     this, but may eventually add support for the publicly available ones.
@@ -154,7 +169,7 @@ dependencies.
 
 ```
 git clone --branch=master https://github.com/google-research/big_vision
-gcloud alpha compute tpus tpu-vm scp --recurse big_vision/big_vision $NAME: --worker=all --zone=$ZONE
+gcloud alpha compute tpus tpu-vm scp --recurse big_vision/big_vision $NAME: --zone=$ZONE --worker=all
 gcloud alpha compute tpus tpu-vm ssh $NAME --zone=$ZONE --worker=all --command "bash big_vision/run_tpu.sh"
 ```
 
@@ -165,8 +180,9 @@ also do it on your local machine and copy the result to the cloud bucket. For
 convenience, we provide instructions on how to prepare data using Cloud TPUs.
 
 Download and prepare TFDS datasets using a single worker. Seven TFDS datasets
-used during evaluations will be generated under `~/tensorflow_datasets/` (should
-take 10-15 minutes in total).
+used during evaluations will be generated under `~/tensorflow_datasets/` (by
+default, can be overwritten by TFDS_DATA_DIR env variable). This should take
+10-15 minutes in total.
 
 ```
 gcloud alpha compute tpus tpu-vm ssh $NAME --zone=$ZONE --worker=0 --command "bash big_vision/run_tpu.sh big_vision.tools.download_tfds_datasets cifar10 cifar100 oxford_iiit_pet oxford_flowers102 cars196 dtd uc_merced"
@@ -205,6 +221,11 @@ run the following command line.
 ```
 gcloud alpha compute tpus tpu-vm ssh $NAME --zone=$ZONE --worker=all --command "TFDS_DATA_DIR=gs://$GS_BUCKET_NAME/tensorflow_datasets bash big_vision/run_tpu.sh big_vision.train --config big_vision/configs/bit_i1k.py  --workdir gs://$GS_BUCKET_NAME/big_vision/workdir/`date '+%m-%d_%H%M'`"
 ```
+
+## Sometimes useful gcloud commands
+
+- Destroy the TPU machines: `gcloud alpha compute tpus tpu-vm delete $NAME --zone $ZONE`
+- Remove all big_vision-related folders on all hosts: `gcloud alpha compute tpus tpu-vm ssh $NAME --zone $ZONE --worker=all --command 'rm -rf ~/big_vision ~/bv_venv'`
 
 # ViT baseline
 

@@ -13,7 +13,7 @@
 # limitations under the License.
 
 # pylint: disable=line-too-long
-r"""Pre-training ViT-S/16 on ILSVRC-2012 following [arxiv link].
+r"""Pre-training ViT-S/16 on ILSVRC-2012 following https://arxiv.org/abs/2205.01580.
 
 This should take 6-7h to finish 90ep on a TPU-v3-8 and reach 76.5%,
 see the tech report for more details.

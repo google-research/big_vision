@@ -114,6 +114,28 @@ def vit_i1k(config):
   )
 
 
+def mlp_mixer_i1k(config):
+  # We could omit init_{shapes,types} if we wanted, as they are the default.
+  config.init_shapes = [(1, 224, 224, 3)]
+  config.init_types = ['float32']
+  config.num_classes = 1000
+
+  config.model_name = 'mlp_mixer'
+  config.model_init = ''  # Will be set in sweep.
+  config.model = dict(variant='L/16')
+
+  config.evals = {}
+  config.evals.fewshot = get_fewshot_lsr()
+  config.evals.val = dict(
+      type='classification',
+      dataset='imagenet2012',
+      split='validation',
+      pp_fn='decode|resize_small(256)|central_crop(224)|value_range(-1, 1)|onehot(1000, key="label", key_result="labels")|keep("image", "labels")',
+      loss_name='softmax_xent',
+      cache_final=False,  # Only run once, on low-mem machine.
+  )
+
+
 def vit_i21k(config):
   # We could omit init_{shapes,types} if we wanted, as they are the default.
   config.init_shapes = [(1, 224, 224, 3)]

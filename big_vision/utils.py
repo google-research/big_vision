@@ -179,7 +179,7 @@ def load_params(tree, npz):
     # When open-sourcing, we usually shared only the params directly.
     params = checkpoint
   if key is not None:
-    params = params[key]
+    params = tree_get(params, key)
   return params
 
 
@@ -453,7 +453,7 @@ class Chrono:
     self.accum_examples_seen = ckpt.get("accum_examples_seen", 0)
 
 
-def _traverse_with_names(tree):
+def _traverse_with_names(tree, with_inner_nodes=False):
   """Traverses nested dicts/dataclasses and emits (leaf_name, leaf_val)."""
   if dataclasses.is_dataclass(tree):
     tree = flax.serialization.to_state_dict(tree)
@@ -465,12 +465,16 @@ def _traverse_with_names(tree):
   elif isinstance(tree, Mapping):
     keys = sorted(tree.keys())
     for key in keys:
-      for path, v in _traverse_with_names(tree[key]):
+      for path, v in _traverse_with_names(tree[key], with_inner_nodes):
         yield (key + "/" + path).rstrip("/"), v
+    if with_inner_nodes:
+      yield "", tree
   elif isinstance(tree, (list, tuple)):
     for idx in range(len(tree)):
-      for path, v in _traverse_with_names(tree[idx]):
+      for path, v in _traverse_with_names(tree[idx], with_inner_nodes):
         yield (str(idx) + "/" + path).rstrip("/"), v
+    if with_inner_nodes:
+      yield "", tree
   else:
     yield "", tree
 
@@ -555,17 +559,29 @@ def tree_map_with_regex(f, tree, regex_rules, not_f=lambda x: x, name=None):
 
 
 def tree_get(tree, name):
-  """Get an entry of pytree by flattened key name, eg a/b/c, with nice error."""
-  # Turn into configdict to use its "did you mean?" error message!
-  flattened = mlc.ConfigDict(dict(tree_flatten_with_names(tree)[0]))
+  """Get an entry of pytree by flattened key name, eg a/b/c, with nice error.
+
+  Args:
+    tree: the pytree to be queried.
+    name: the path to extract from the tree, see below for examples.
+
+  Returns:
+    A few examples:
+      tree = {'a': 1, 'b': {'c': 2, 'd': 3}}
+      tree_get(tree, 'a') == 1
+      tree_get(tree, 'b/c') == 2
+      tree_get(tree, 'b') == {'c': 2, 'd': 3}
+  """
+  flattened = dict(_traverse_with_names(tree, with_inner_nodes=True))
   try:
     return flattened[name]
   except KeyError as e:
     class Msg(str):  # Reason: https://stackoverflow.com/a/70114007/2366315
       def __repr__(self):
         return str(self)
-    msg = "\n".join(["Available keys:", *flattened, ""])
-    msg = flattened._generate_did_you_mean_message(name, msg)  # pylint: disable=protected-access
+    msg = "\n".join([name, "Available keys:", *flattened, ""])
+    # Turn into configdict to use its "did you mean?" error message!
+    msg = mlc.ConfigDict(flattened)._generate_did_you_mean_message(name, msg)  # pylint: disable=protected-access
     raise KeyError(Msg(msg)) from e
 
 
@@ -887,3 +903,18 @@ class BigVisionMetricWriter:
     if jax.process_index() == 0:
       self.pool.close()
       self.pool.join()
+
+
+def maybe_cleanup_workdir(workdir, cleanup, info):
+  """Potentially removes workdirs at end of run for cleanup."""
+  if not workdir:
+    return
+
+  if not cleanup:
+    info("Logs/checkpoints are in %s", workdir)
+  elif jax.process_index() == 0:
+    gfile.rmtree(workdir)
+    try:  # Only need this on the last work-unit, if already empty.
+      gfile.remove(os.path.join(workdir, ".."))
+    except tf.errors.OpError:
+      pass

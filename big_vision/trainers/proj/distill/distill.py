@@ -12,10 +12,20 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Training loop example.
+"""Training loop for distillation as in https://arxiv.org/abs/2106.05237.
 
-This is a basic variant of a training loop, good starting point for fancy ones.
+It works by having a (set of) teacher model(s) defined the same way as student
+in the config and, for now, only distilling logits with one of many loss
+functions.
+
+We explored distilling intermediate feature maps, extra data, and other tricks
+in depth in two interships in a separate prototype codebase but eventually they
+are not necessary, and thus not (yet?) implemented in this codebase.
+
+Thus, for now, there are no extra learnable parameters besides the student.
+This keeps code relatively simple.
 """
+
 from functools import partial
 import importlib
 import multiprocessing.pool
@@ -24,8 +34,9 @@ import os
 from absl import app
 from absl import flags
 from absl import logging
+from big_vision import input_pipeline
 import big_vision.evaluators.common as eval_common
-import big_vision.input_pipeline as input_pipeline
+import big_vision.evaluators.proj.distill.distance as dd
 import big_vision.optax as bv_optax
 import big_vision.pp.builder as pp_builder
 import big_vision.utils as u
@@ -50,6 +61,13 @@ flags.DEFINE_boolean("cleanup", default=False,
 
 # Adds jax flags to the program.
 jax.config.parse_flags_with_absl()
+
+
+def getfirst(d, *keys, default=None):
+  """Returns the first of `keys` that's present in mapping `d`."""
+  for k in reversed(keys):
+    default = d.get(k, default)
+  return default
 
 
 def main(argv):
@@ -140,91 +158,157 @@ def main(argv):
   info("Running for %d steps, that means %f epochs and %f steps per epoch",
        total_steps, total_steps * batch_size / ntrain_img, steps_per_epoch)
 
-  write_note(f"Initializing {config.model_name} model...")
-  model_mod = importlib.import_module(f"big_vision.models.{config.model_name}")
-  model = model_mod.Model(
-      num_classes=config.num_classes, **config.get("model", {}))
+  # Create student and teacher models
+  def get_model_mod(name):  # Used many times.
+    mod_name = config[f"{name}_name"]
+    return importlib.import_module(f"big_vision.models.{mod_name}")
+
+  write_note("Initializing models...")
+  def make_model(name):
+    return get_model_mod(name).Model(
+        num_classes=config.num_classes, **config.get(name, {}))
+
+  models = {
+      "student": make_model("student"),
+      **{t: make_model(t) for t in config.teachers}
+  }
 
   # We want all parameters to be created in host RAM, not on any device, they'll
   # be sent there later as needed, otherwise we already encountered two
   # situations where we allocate them twice.
-  @partial(jax.jit, backend="cpu")
-  def init(rng):
-    shape = tuple(train_ds.element_spec["image"].shape[1:])
-    bs = config.batch_size // jax.device_count()
-    dummy_input = jnp.zeros((bs,) + shape, jnp.float32)
-    params = flax.core.unfreeze(model.init(rng, dummy_input))["params"]
+  def get_init(model):
+    @partial(jax.jit, backend="cpu")
+    def _init(rng):
+      shape = tuple(train_ds.element_spec["image"].shape[1:])
+      bs = config.batch_size // jax.device_count()
+      dummy_input = jnp.zeros((bs,) + shape, jnp.float32)
+      params = flax.core.unfreeze(model.init(rng, dummy_input))["params"]
 
-    # Set bias in the head to a low value, such that loss is small initially.
-    if "init_head_bias" in config:
-      params["head"]["bias"] = jnp.full_like(params["head"]["bias"],
-                                             config["init_head_bias"])
+      # Set bias in the head to a low value, such that loss is small initially.
+      if "init_head_bias" in config:
+        params["head"]["bias"] = jnp.full_like(
+            params["head"]["bias"], config["init_head_bias"])
+      return params
+    return _init
 
-    return params
+  rng, *rng_inits = jax.random.split(rng, len(models) + 1)
+  params_cpu = {name: get_init(models[name])(rngi)
+                for name, rngi in zip(models, rng_inits)}
 
-  rng, rng_init = jax.random.split(rng)
-  params_cpu = init(rng_init)
-
+  # Log all parameters to helping debugging.
   if jax.process_index() == 0:
-    num_params = sum(p.size for p in jax.tree_leaves(params_cpu))
-    parameter_overview.log_parameter_overview(params_cpu, msg="init params")
-    mw.measure("num_params", num_params)
+    for name, params in params_cpu.items():
+      parameter_overview.log_parameter_overview(params, msg=f"{name} params")
+      mw.measure(f"num_params_{name}",
+                 sum(p.size for p in jax.tree_leaves(params)))
 
   write_note(f"Initializing {config.optax_name} optimizer...")
-  tx, sched_fns = bv_optax.make(config, params_cpu, sched_kw=dict(
-      global_batch_size=batch_size,
-      total_steps=total_steps,
-      steps_per_epoch=steps_per_epoch))
+  # For now, we explicitly only optimize the student parameters as there's
+  # nothing else to be optimized. If we ever want to add learnable projections
+  # or similar for good (we explored but ditched), need to refactor this a bit.
+  tx, sched_fns = bv_optax.make(
+      config, params_cpu["student"], sched_kw=dict(
+          global_batch_size=batch_size,
+          total_steps=total_steps,
+          steps_per_epoch=steps_per_epoch))
 
   # We jit this, such that the arrays are created on the CPU, not device[0].
-  opt_cpu = jax.jit(tx.init, backend="cpu")(params_cpu)
+  opt_cpu = jax.jit(tx.init, backend="cpu")(params_cpu["student"])
   sched_fns_cpu = [jax.jit(sched_fn, backend="cpu") for sched_fn in sched_fns]
 
-  @partial(jax.pmap, axis_name="batch", donate_argnums=(0, 1))
-  def update_fn(params, opt, rng, images, labels):
-    """Update step."""
+  @jax.named_call
+  def loss_fn(student_params, params, data, rngs, reduce=True):
+    # Note: need to extract and use `student_params` out of `params` because the
+    # first argument of `loss_fn` is what's differentiated wrt.
+    params["student"] = student_params
+
+    def fwd(name, params):
+      return jax.named_call(models[name].apply, name=name)(
+          {"params": params}, getfirst(data, name, "image"),
+          train=name == "student", rngs=rngs.get(name)
+      )[0]  # logits, unused_outputs
+    logits = {name: fwd(name, w) for name, w in params.items()}
 
     measurements = {}
+    for name, lg in logits.items():
+      measurements[f"entropy_{name}"] = -jnp.sum(
+          jax.nn.log_softmax(lg) * jax.nn.softmax(lg), axis=-1)
+      if "labels" in data:
+        measurements[f"task_loss_{name}"] = u.softmax_xent(
+            logits=lg, labels=data["labels"], reduction=False)
 
+    # NOTE: xent is linear in labels, so for KL, this is actually the same as
+    # using a teacher-ensemble in probs-space!
+    measurements["distill_loss"] = 0.0
+    for name in config.teachers:
+      l = dd.dist(logits["student"], logits[name], config.get("distance", "kl"),
+                  **config.get("distance_kw", {}))
+      measurements[f"distill_loss_{name}"] = l
+      measurements["distill_loss"] += l
+
+    outputs = (measurements["distill_loss"], measurements)
+    return jax.tree_map(jnp.mean, outputs) if reduce else outputs
+
+  @partial(jax.pmap, axis_name="batch", donate_argnums=(0, 1))
+  def update_fn(params, opt, rng, data):
+    """Update step."""
+
+    # Mixup. Note: overwrites the `data` entries (that's intended).
     if config.get("mixup") and config.mixup.p:
-      rng, (images, labels), _ = u.mixup(rng, images, labels, **config.mixup)
+      to_mix = {name: data[name]
+                for name in ("image", "labels") + tuple(models) if name in data}
+      rng, _, to_mix = u.mixup(rng, **config.mixup, **to_mix)
+      data = {**data, **to_mix}
 
     # Get device-specific loss rng.
-    rng, rng_model = jax.random.split(rng, 2)
-    rng_model_local = jax.random.fold_in(rng_model, jax.lax.axis_index("batch"))
+    rng, *rng_models = jax.random.split(rng, len(models) + 1)
+    rngs_models_local = {
+        name: {"dropout": jax.random.fold_in(rngi, jax.lax.axis_index("batch"))}
+        for name, rngi in zip(models, rng_models)
+    }
 
-    def loss_fn(params, images, labels):
-      logits, _ = model.apply(
-          {"params": flax.core.freeze(params)}, images,
-          train=True, rngs={"dropout": rng_model_local})
-      return getattr(u, config.get("loss", "sigmoid_xent"))(
-          logits=logits, labels=labels)
+    w = params["student"]  # Need to explicitly pull out the optimized ones.
+    (l, measurements), grads = jax.lax.pmean(
+        jax.value_and_grad(loss_fn, has_aux=True)(
+            w, params, data, rngs=rngs_models_local),
+        axis_name="batch")
+    updates, opt = tx.update(grads, opt, w)
+    w = optax.apply_updates(w, updates)
+    params["student"] = w
 
-    l, grads = jax.value_and_grad(loss_fn)(params, images, labels)
-    l, grads = jax.lax.pmean((l, grads), axis_name="batch")
-    updates, opt = tx.update(grads, opt, params)
-    params = optax.apply_updates(params, updates)
-
+    # Take some logging measurements
     gs = jax.tree_leaves(bv_optax.replace_frozen(config.schedule, grads, 0.))
     measurements["l2_grads"] = jnp.sqrt(sum([jnp.vdot(g, g) for g in gs]))
-    ps = jax.tree_leaves(params)
+    ps = jax.tree_leaves(w)
     measurements["l2_params"] = jnp.sqrt(sum([jnp.vdot(p, p) for p in ps]))
     us = jax.tree_leaves(updates)
     measurements["l2_updates"] = jnp.sqrt(sum([jnp.vdot(u, u) for u in us]))
 
     return params, opt, rng, l, measurements
 
-  # We do not jit/pmap this function, because it is passed to evaluator that
-  # does it later. We output as many intermediate tensors as possible for
-  # maximal flexibility. Later `jit` will prune out things that are not needed.
-  def predict_fn(params, image):
-    logits, out = model.apply({"params": params}, image)
-    return logits, out
+  # TODO: implement a distillation evaluator.
+  # @partial(jax.pmap, axis_name="batch")
+  # def evaluation_distill_fn(params, nparams, data):
+  #   mask = data["mask"]
+  #   _, extra_losses = loss_fn(params, nparams, data, reduce=False)
+  #   losses = extra_losses["distill_loss"]
+  #   loss = jax.lax.psum(losses * mask, axis_name="batch")
+  #   n = jax.lax.psum(mask, axis_name="batch")
+  #   return loss, n
+
+  # We always load the teachers first, because they NEED to be initialized
+  # and since we don't ever modify them, we don't store them in checkpoints.
+  for name in config.teachers:
+    init_def = config[f"{name}_init"]
+    write_note(f"Initializing {name} from {init_def}…")
+    params_cpu[name] = get_model_mod(name).load(
+        params_cpu[name], init_def, config[name],
+        **config.get(f"{name}_load", {}))
 
   # Decide how to initialize training. The order is important.
   # 1. Always resumes from the existing checkpoint, e.g. resumes a finetune job.
   # 2. Resume from a previous checkpoint, e.g. start a cooldown training job.
-  # 3. Initialize model from something, e,g, start a fine-tuning job.
+  # 3. Initialize student from something, e.g. start a fine-tuning job.
   # 4. Train from scratch.
   resume_checkpoint_path = None
   if save_checkpoint_path and gfile.exists(save_checkpoint_path):
@@ -233,25 +317,23 @@ def main(argv):
     resume_checkpoint_path = fillin(config.resume)
   if resume_checkpoint_path:
     write_note("Resume training from checkpoint...")
-    checkpoint = {
-        "params": params_cpu,
-        "opt": opt_cpu,
-        "chrono": chrono.save(),
-    }
+    # NOTE: we never change the teachers, so only checkpoint student here.
+    checkpoint = {"params": params_cpu["student"],
+                  "opt": opt_cpu, "chrono": chrono.save()}
     checkpoint_tree = jax.tree_structure(checkpoint)
     loaded = u.load_checkpoint(checkpoint_tree, resume_checkpoint_path)
     # bfloat16 type gets lost when data is saved to disk, so we recover it.
     checkpoint = jax.tree_map(u.recover_dtype, loaded)
-    params_cpu, opt_cpu = checkpoint["params"], checkpoint["opt"]
+    params_cpu["student"], opt_cpu = checkpoint["params"], checkpoint["opt"]
     chrono.load(checkpoint["chrono"])
-  elif config.get("model_init"):
-    write_note(f"Initialize model from {config.model_init}...")
-    params_cpu = model_mod.load(
-        params_cpu, config.model_init, config.get("model"),
-        **config.get("model_load", {}))
+  elif config.get("student_init"):
+    write_note(f"Initialize student from {config.student_init}...")
+    params_cpu["student"] = get_model_mod("student").load(
+        params_cpu["student"], config.student_init, config.get("student"),
+        **config.get("student_load", {}))
     if jax.process_index() == 0:
       parameter_overview.log_parameter_overview(
-          params_cpu, msg="restored params")
+          params_cpu["student"], msg="restored (student) params")
 
   write_note("Kicking off misc stuff...")
   first_step = bv_optax.get_count(opt_cpu)
@@ -262,8 +344,31 @@ def main(argv):
   params_repl = flax.jax_utils.replicate(params_cpu)
   opt_repl = flax.jax_utils.replicate(opt_cpu)
 
+  # Define predict functions that the evaluators can use:
+  # 1. One per model
+  predict_fns = {}
+  for name, model in models.items():
+    def fwd(params, image, n=name, m=model):
+      return m.apply({"params": params[n]}, image)
+    predict_fns[f"{name}_fwd"] = fwd
+  # 2. One for the ensemble of all teachers.
+  def teacher_ensemble_fwd(params, image):
+    all_teacher_logits = [
+        models[name].apply(params[name], image)[0]  # return is `logits, out`
+        for name in config.teachers
+    ]
+    return jnp.mean([jax.nn.softmax(l) for l in all_teacher_logits], axis=0), {}
+  predict_fns["teacher_ensemble_fwd"] = teacher_ensemble_fwd
+  # 3.One for each (student, teacher) pair, eg for distance eval.
+  for name in [*config.teachers, "teacher_ensemble"]:
+    def fwd(params, image, n=name):  # pylint: disable=function-redefined
+      student_ret = predict_fns["student_fwd"](params, image)
+      teacher_ret = predict_fns[f"{n}_fwd"](params, image)
+      return student_ret, teacher_ret
+    predict_fns[f"student_{name}_fwd"] = fwd
+
   evaluators = eval_common.from_config(
-      config, {"predict": predict_fn},
+      config, predict_fns,
       lambda s: write_note(f"Initializing evaluator: {s}...\n{chrono.note}"))
 
   rng, rng_loop = jax.random.split(rng, 2)
@@ -280,9 +385,7 @@ def main(argv):
 
     with jax.profiler.StepTraceAnnotation("train_step", step_num=step):
       params_repl, opt_repl, rngs_loop, loss_value, measurements = update_fn(
-          params_repl, opt_repl, rngs_loop,
-          train_batch["image"],
-          train_batch["labels"])
+          params_repl, opt_repl, rngs_loop, train_batch)
 
     # On the first host, let's always profile a handful of early steps.
     if jax.process_index() == 0:
@@ -305,24 +408,38 @@ def main(argv):
     # Checkpoint saving
     if (save_checkpoint_path and
         u.itstime(step, config.get("checkpoint_steps"), total_steps, host=0)):
-      chrono.pause(wait_for=(params_repl, opt_repl))
+      chrono.pause(wait_for=(params_repl["student"], opt_repl))
       u.checkpointing_timeout(checkpoint_writer,
                               config.get("checkpoint_timeout", 1))
       # We need to transfer the weights over now or else we risk keeping them
       # alive while they'll be updated in a future step, creating hard to debug
       # memory errors (see (internal link)). Also, takes device 0's params only.
-      params_cpu = jax.tree_map(lambda x: np.array(x[0]), params_repl)
-      opt_cpu = jax.tree_map(lambda x: np.array(x[0]), opt_repl)
+      params_cpu["student"], opt_cpu = jax.tree_map(
+          lambda x: np.array(x[0]), (params_repl["student"], opt_repl))
 
       # Check whether we want to keep a copy of the current checkpoint.
       copy_step = None
       if u.itstime(step, config.get("keep_checkpoint_steps"), total_steps):
         copy_step = step
 
-      ckpt = {"params": params_cpu, "opt": opt_cpu, "chrono": chrono.save()}
+      ckpt = {"params": params_cpu["student"],
+              "opt": opt_cpu,
+              "chrono": chrono.save()}
       checkpoint_writer = pool.apply_async(
           u.save_checkpoint, (ckpt, save_checkpoint_path, copy_step))
       chrono.resume()
+
+    # TODO: Evaluator to compute distillation loss/distance on val.
+    # if u.itstime(step, config.log_eval_steps, total_steps):
+    #   chrono.pause()
+    #   for val_name, (val_iter, val_steps) in val_ds.items():
+    #     loss, nseen = 0, 0
+    #     for _, batch in zip(range(val_steps), val_iter):
+    #       batch_losses, batch_n = evaluation_distill_fn(
+    #           opt_repl.target, nopt_repl, batch)
+    #       loss += np.sum(np.array(batch_losses[0]))
+    #       nseen += np.sum(np.array(batch_n[0]))
+    #     mw.measure(f"{val_name}_distill_loss", loss / nseen)
 
     for (name, evaluator, log_steps, prefix) in evaluators:
       if u.itstime(step, log_steps, total_steps):

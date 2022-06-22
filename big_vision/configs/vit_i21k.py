@@ -102,6 +102,7 @@ def get_config(arg=None):
 
   # Eval section
   eval_common = dict(
+      type='classification',
       dataset=config.dataset,
       pp_fn=pp_eval,
       loss_name=config.loss,

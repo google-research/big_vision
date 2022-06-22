@@ -110,6 +110,11 @@ class TreeTest(tf.test.TestCase):
                           ('conv2/bias', 3), ('conv2/kernel', 2)]
     self.d2_named_flat_jax = [('conv1/bias', 1), ('conv1/kernel', 0),
                               ('conv2/bias', 3), ('conv2/kernel', 2)]
+    self.d2_named_flat_inner = [
+        ('conv1/bias', 1), ('conv1/kernel', 0), ('conv1', self.d2['conv1']),
+        ('conv2/bias', 3), ('conv2/kernel', 2), ('conv2', self.d2['conv2']),
+        ('', self.d2),
+    ]
 
     # This is a very important testcase that checks whether we correctly
     # recover jax' traversal order, even though our custom traversal may not
@@ -135,6 +140,10 @@ class TreeTest(tf.test.TestCase):
 
     names_and_vals = list(utils._traverse_with_names(self.d2))
     self.assertEqual(names_and_vals, self.d2_named_flat)
+
+    names_and_vals = list(utils._traverse_with_names(
+        self.d2, with_inner_nodes=True))
+    self.assertEqual(names_and_vals, self.d2_named_flat_inner)
 
     names_and_vals = list(utils._traverse_with_names(self.d3))
     self.assertEqual(names_and_vals, self.d3_named_flat)
@@ -176,6 +185,15 @@ class TreeTest(tf.test.TestCase):
     # Also note that "b/x" is matched by rule 1 only (because it comes first).
     self.assertEqual(
         utils.make_mask_trees(tree, ('.*/x', 'b/.*')), [msk1, msk2])
+
+  def test_tree_get(self):
+    tree = {'a': {'b': 0, 'x': 1}, 'b': {'x': 2, 'y': 3}}
+    self.assertEqual(utils.tree_get(tree, 'a/b'), 0)
+    self.assertEqual(utils.tree_get(tree, 'a/x'), 1)
+    self.assertEqual(utils.tree_get(tree, 'b/x'), 2)
+    self.assertEqual(utils.tree_get(tree, 'b/y'), 3)
+    self.assertEqual(utils.tree_get(tree, 'a'), tree['a'])
+    self.assertEqual(utils.tree_get(tree, 'b'), tree['b'])
 
 
 class CreateLearningRateScheduleTest(parameterized.TestCase, tf.test.TestCase):

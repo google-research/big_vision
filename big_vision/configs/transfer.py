@@ -128,7 +128,7 @@ def _set_imagenet_variants(config, h_res=448, l_res=384):
   # Special-case rename for i1k (val+test -> minival+val)
   config.evals.minival = config.evals.val
   config.evals.val = config.evals.test
-  # NOTE: keep test == val for convenience in flatboards.
+  # NOTE: keep test == val for convenience in subsequent analysis.
 
   config.evals.real = dict(type='classification')
   config.evals.real.dataset = 'imagenet2012_real'

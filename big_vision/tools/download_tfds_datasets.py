@@ -34,9 +34,10 @@ def main(argv):
         "cifar100",
         "oxford_iiit_pet",
         "oxford_flowers102",
+        "imagenet_v2",
     ]
   for d in datasets:
-    tfds.load(name=d, data_dir="~/tensorflow_datasets/", download=True)
+    tfds.load(name=d, download=True)
 
 
 if __name__ == "__main__":
