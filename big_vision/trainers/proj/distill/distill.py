@@ -25,7 +25,7 @@ are not necessary, and thus not (yet?) implemented in this codebase.
 Thus, for now, there are no extra learnable parameters besides the student.
 This keeps code relatively simple.
 """
-
+# pylint: disable=consider-using-from-import
 from functools import partial
 import importlib
 import multiprocessing.pool
@@ -47,6 +47,7 @@ import jax.numpy as jnp
 from ml_collections import config_flags
 import numpy as np
 import optax
+import tensorflow as tf
 import tensorflow.io.gfile as gfile
 
 # pylint: disable=logging-fstring-interpolation
@@ -72,6 +73,7 @@ def getfirst(d, *keys, default=None):
 
 def main(argv):
   del argv
+  tf.config.experimental.set_visible_devices([], "GPU")
 
   config = flags.FLAGS.config
   workdir = flags.FLAGS.workdir
@@ -82,10 +84,10 @@ def main(argv):
 
   assert not config.get("grad_accum_steps"), "Grad-acc not supported anymore."
 
-  save_checkpoint_path = None
-  if workdir and config.get("checkpoint_steps"):
+  save_ckpt_path = None
+  if workdir and config.get("ckpt_steps"):
     gfile.makedirs(workdir)
-    save_checkpoint_path = os.path.join(workdir, "checkpoint.npz")
+    save_ckpt_path = os.path.join(workdir, "checkpoint.npz")
 
   # The pool is used to perform misc operations such as logging in async way.
   pool = multiprocessing.pool.ThreadPool()
@@ -111,11 +113,11 @@ def main(argv):
       info("%s", note)
 
   # Verify settings to make sure no checkpoints are accidentally missed.
-  if config.get("keep_checkpoint_steps"):
-    assert config.get("checkpoint_steps"), "Specify `checkpoint_steps`."
-    assert config.keep_checkpoint_steps % config.checkpoint_steps == 0, (
-        f"`keep_checkpoint_steps` ({config.checkpoint_steps}) should be"
-        f"divisible by `checkpoint_steps ({config.checkpoint_steps}).`")
+  if config.get("keep_ckpt_steps"):
+    assert config.get("ckpt_steps"), "Specify `ckpt_steps`."
+    assert config.keep_ckpt_steps % config.ckpt_steps == 0, (
+        f"`keep_ckpt_steps` ({config.ckpt_steps}) should be"
+        f"divisible by `ckpt_steps ({config.ckpt_steps}).`")
 
   batch_size = config.batch_size
   if batch_size % jax.device_count() != 0:
@@ -128,7 +130,7 @@ def main(argv):
        batch_size // jax.device_count())
 
   # First thing after above sanity checks, so we can log "start" ticks.
-  mw = u.BigVisionMetricWriter(xid, wid, workdir)
+  mw = u.BigVisionMetricWriter(xid, wid, workdir, config)
   chrono = u.Chrono()
 
   write_note("Initializing train dataset...")
@@ -310,18 +312,18 @@ def main(argv):
   # 2. Resume from a previous checkpoint, e.g. start a cooldown training job.
   # 3. Initialize student from something, e.g. start a fine-tuning job.
   # 4. Train from scratch.
-  resume_checkpoint_path = None
-  if save_checkpoint_path and gfile.exists(save_checkpoint_path):
-    resume_checkpoint_path = save_checkpoint_path
+  resume_ckpt_path = None
+  if save_ckpt_path and gfile.exists(save_ckpt_path):
+    resume_ckpt_path = save_ckpt_path
   elif config.get("resume"):
-    resume_checkpoint_path = fillin(config.resume)
-  if resume_checkpoint_path:
+    resume_ckpt_path = fillin(config.resume)
+  if resume_ckpt_path:
     write_note("Resume training from checkpoint...")
     # NOTE: we never change the teachers, so only checkpoint student here.
     checkpoint = {"params": params_cpu["student"],
                   "opt": opt_cpu, "chrono": chrono.save()}
     checkpoint_tree = jax.tree_structure(checkpoint)
-    loaded = u.load_checkpoint(checkpoint_tree, resume_checkpoint_path)
+    loaded = u.load_checkpoint(checkpoint_tree, resume_ckpt_path)
     # bfloat16 type gets lost when data is saved to disk, so we recover it.
     checkpoint = jax.tree_map(u.recover_dtype, loaded)
     params_cpu["student"], opt_cpu = checkpoint["params"], checkpoint["opt"]
@@ -373,7 +375,7 @@ def main(argv):
 
   rng, rng_loop = jax.random.split(rng, 2)
   rngs_loop = flax.jax_utils.replicate(rng_loop)
-  checkpoint_writer = None
+  ckpt_writer = None
 
   write_note(f"First step compilations...\n{chrono.note}")
   error = None  # For exiting with an error after cleanup. Avoids indentation.
@@ -406,11 +408,10 @@ def main(argv):
         break
 
     # Checkpoint saving
-    if (save_checkpoint_path and
-        u.itstime(step, config.get("checkpoint_steps"), total_steps, host=0)):
+    if (save_ckpt_path and
+        u.itstime(step, config.get("ckpt_steps"), total_steps, host=0)):
       chrono.pause(wait_for=(params_repl["student"], opt_repl))
-      u.checkpointing_timeout(checkpoint_writer,
-                              config.get("checkpoint_timeout", 1))
+      u.checkpointing_timeout(ckpt_writer, config.get("ckpt_timeout", 1))
       # We need to transfer the weights over now or else we risk keeping them
       # alive while they'll be updated in a future step, creating hard to debug
       # memory errors (see (internal link)). Also, takes device 0's params only.
@@ -419,14 +420,14 @@ def main(argv):
 
       # Check whether we want to keep a copy of the current checkpoint.
       copy_step = None
-      if u.itstime(step, config.get("keep_checkpoint_steps"), total_steps):
+      if u.itstime(step, config.get("keep_ckpt_steps"), total_steps):
         copy_step = step
 
       ckpt = {"params": params_cpu["student"],
               "opt": opt_cpu,
               "chrono": chrono.save()}
-      checkpoint_writer = pool.apply_async(
-          u.save_checkpoint, (ckpt, save_checkpoint_path, copy_step))
+      ckpt_writer = pool.apply_async(
+          u.save_checkpoint, (ckpt, save_ckpt_path, copy_step))
       chrono.resume()
 
     # TODO: Evaluator to compute distillation loss/distance on val.

@@ -21,7 +21,7 @@ see the tech report for more details.
 Command to run:
 
 big_vision.train \
-    --config big_vision/configs/ilsvrc_vit_s16.py \
+    --config big_vision/configs/vit_s16_i1k.py \
     --workdir gs://[your_bucket]/big_vision/`date '+%m-%d_%H%M'`
 
 To run for 300ep, add `--config.num_epochs 300` to the command.
@@ -55,7 +55,7 @@ def get_config():
   pp_eval = 'decode|resize_small(256)|central_crop(224)' + pp_common
 
   config.log_training_steps = 50
-  config.checkpoint_steps = 1000
+  config.ckpt_steps = 1000
 
   # Model section
   config.model_name = 'vit'

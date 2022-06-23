@@ -161,7 +161,7 @@ def load_params(tree, npz):
     which case ["opt"]["params"]["keyname"] will become ["opt"]["params"] in
     the returned checkpoint. This allows ANY model that uses this function to
     load itself from a checkpoint that contains multiple sub-models, such as
-    checkpoints generated from Argus or Distillation trainers.
+    checkpoints generated from image_text or Distillation trainers.
   """
   key = None  # Whether we want to extract only a sub-key of the model.
   if isinstance(npz, str):
@@ -197,6 +197,36 @@ def sigmoid_xent(*, logits, labels, reduction=True):
   log_not_p = jax.nn.log_sigmoid(-logits)
   nll = -jnp.sum(labels * log_p + (1. - labels) * log_not_p, axis=-1)
   return jnp.mean(nll) if reduction else nll
+
+
+def bidirectional_contrastive_loss(zimg, ztxt, t, mask=None, reduction=False):
+  """Bidirectional contrastive loss (e.g. for contrastive trainer/evaluator)."""
+  # BF.FB = BB
+  logits = jnp.dot(zimg, ztxt.T) * t
+
+  if mask is not None:
+    # Set to negative infinity where mask = 0. Masked examples will disappear
+    # under softmax, and be ignored by ncorrect (NINF will never win argmax).
+    exclude = jnp.logical_not(mask)  # Now 1 if we don't want to keep.
+    exclude = jnp.logical_or(exclude[:, None], exclude[None, :])
+    logits = jnp.where(exclude, jnp.NINF, logits)
+
+  # Note: assumed t is in a good range e.g. already passed through exp/softplus.
+  l1 = -jnp.diag(jax.nn.log_softmax(logits, axis=1))  # NLL img->txt
+  l2 = -jnp.diag(jax.nn.log_softmax(logits, axis=0))  # NLL txt->img
+  l = 0.5 * (l1 + l2)
+
+  if mask is not None:
+    l = jnp.where(mask, l, 0)
+
+  redux = jnp.mean if reduction else lambda x: x
+  if reduction and mask is not None:
+    redux = lambda x: jnp.sum(x * mask) / (jnp.sum(mask) + 1e-8)
+
+  # Also return extra measurements.
+  return redux(l), {
+      "ncorrect": redux(jnp.argmax(logits, axis=1) == jnp.arange(len(logits))),
+  }
 
 
 def softmax_xent(*, logits, labels, reduction=True, kl=False, axis=-1):
@@ -315,7 +345,7 @@ def checkpointing_timeout(writer, timeout):
           "Checkpoint writing seems to be a bottleneck. Make sure you do "
           "not do something wrong, like writing checkpoints to a distant "
           "cell. In a case you are OK with checkpoint writing being a "
-          "bottleneck, you can configure `checkpoint_timeout` parameter") from e
+          "bottleneck, you can configure `ckpt_timeout` parameter") from e
 
 
 def hms(s):
@@ -851,7 +881,7 @@ def startstop_prof_at_steps(
 class BigVisionMetricWriter:
   """A class for logging metrics."""
 
-  def __init__(self, xid=-1, wid=-1, workdir=None):
+  def __init__(self, xid=-1, wid=-1, workdir=None, config=None):
     self.step_start(0)
     if jax.process_index() != 0: return  # Only one host shall write stuff.
 
@@ -863,6 +893,9 @@ class BigVisionMetricWriter:
                                   f"big_vision_{xid}_{wid}_metrics.txt")
       else:
         self.fname = os.path.join(workdir, "big_vision_metrics.txt")
+      if config:
+        with gfile.GFile(os.path.join(workdir, "config.json"), "w") as f:
+          f.write(config.to_json())
 
   def step_start(self, step):
     self.step = step

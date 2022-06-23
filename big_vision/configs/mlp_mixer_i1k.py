@@ -55,13 +55,13 @@ def get_config(mode=None):
   )
 
   config.batch_size = 4096
-  config.num_epochs = 300 if mode != 'regression_test' else 60
+  config.num_epochs = 300
 
   config.shuffle_buffer_size = 250_000  # Per host, so small-ish is ok.
 
   config.log_training_steps = 50
-  config.checkpoint_steps = 1000
-  config.checkpoint_timeout = 1
+  config.ckpt_steps = 1000
+  config.ckpt_timeout = 1
 
   config.prefetch_to_device = 2
 
@@ -105,5 +105,12 @@ def get_config(mode=None):
   config.evals.real.pp_fn = ppv.format(lbl='real_label')
 
   config.fewshot = get_fewshot_lsr()
+
+  if mode == 'gpu8':
+    config.num_epochs = 60
+    config.batch_size = 512
+    config.cache_raw = False
+  if mode == 'regression_test':
+    config.num_epochs = 60
 
   return config

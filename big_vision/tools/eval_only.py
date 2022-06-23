@@ -63,14 +63,14 @@ def main(argv):
     if jax.process_index() == 0:
       logging.info("NOTE: %s", note)
 
-  mw = u.BigVisionMetricWriter(xid, wid, workdir)
+  mw = u.BigVisionMetricWriter(xid, wid, workdir, config)
 
   write_note(f"Initializing {config.model_name} model...")
   assert config.get("model", {}).get("reinit") is None, (
       "I don't think you want any part of the model to be re-initialized.")
   model_mod = importlib.import_module(f"big_vision.models.{config.model_name}")
   model_kw = dict(config.get("model", {}))
-  if "num_classes" in config:  # Make it work for regular + argus.
+  if "num_classes" in config:  # Make it work for regular + image_text.
     model_kw["num_classes"] = config.num_classes
   model = model_mod.Model(**model_kw)
 
@@ -101,9 +101,8 @@ def main(argv):
   write_note("Replicating...")
   params_repl = flax_utils.replicate(params_cpu)
 
-  def predict_fn(params, image):
-    out = model.apply({"params": params}, image)
-    return out[0], out[-1]
+  def predict_fn(params, image, *args):
+    return model.apply({"params": params}, image, *args)
 
   evaluators = eval_common.from_config(
       config, {"predict": predict_fn, "model": model},

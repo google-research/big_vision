@@ -102,7 +102,7 @@ def get_config(arg=None):
   config.prefetch_to_device = 4
 
   config.log_training_steps = 50
-  config.checkpoint_steps = 1000
+  config.ckpt_steps = 1000
 
   # Model section
   config.model_name = 'vit'
@@ -156,9 +156,10 @@ def get_config(arg=None):
   if arg.runlocal:
     config.shuffle_buffer_size = 10
     config.batch_size = 8
-    config.minival.split = 'train[:16]'
-    config.val.split = 'validation[:16]'
-    config.real.split = 'validation[:16]'
-    config.v2.split = 'test[:16]'
+    config.evals.train.split = 'train[:16]'
+    config.evals.minival.split = 'train[:16]'
+    config.evals.val.split = 'validation[:16]'
+    config.evals.real.split = 'validation[:16]'
+    config.evals.v2.split = 'test[:16]'
 
   return config

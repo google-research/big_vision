@@ -83,7 +83,7 @@ def get_config(arg=None):
   config.prefetch_to_device = 4
 
   config.log_training_steps = 50
-  config.checkpoint_steps = 1000
+  config.ckpt_steps = 1000
 
   # Model section
   config.model_name = 'vit'

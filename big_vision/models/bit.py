@@ -20,6 +20,7 @@ from big_vision import utils
 from big_vision.models import common
 import flax
 import flax.linen as nn
+import flax.training.checkpoints
 import jax.numpy as jnp
 import numpy as np
 
@@ -141,6 +142,8 @@ def get_block_desc(depth):
 
 def fix_old_checkpoints(params):
   """Modifies params from old checkpoints to run with current implementation."""
+  params = flax.core.unfreeze(
+      flax.training.checkpoints.convert_pre_linen(params))
   # Old linen used to store non-squeezed GN params.
   params = flax.traverse_util.unflatten_dict({
       k: np.squeeze(v) if (set(k)

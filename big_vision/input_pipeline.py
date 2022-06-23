@@ -56,6 +56,7 @@ def get_dataset_tfds(dataset="imagenet2012", split="train",
       read_config=tfds.ReadConfig(
           skip_prefetch=True,  # We prefetch after pipeline.
           try_autocache=False,  # We control this, esp. for few-shot.
+          add_tfds_id=True,
       ),
       decoders=skip_decoders), builder
 

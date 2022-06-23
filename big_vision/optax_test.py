@@ -276,7 +276,7 @@ class OptaxTest(parameterized.TestCase):
     gflat, _ = jax.tree_flatten(
         # Don't count frozen params towards gradient norm.
         jax.tree_map(lambda g, sched_fn: {frozen_fn: 0}.get(sched_fn, g),
-                          grads, sched_fns))
+                     grads, sched_fns))
     l2_g = jnp.sqrt(sum([jnp.vdot(p, p) for p in gflat]))
     grad_clip_factor = jnp.minimum(1.0, config.grad_clip_norm / l2_g)
     grads_scaled = jax.tree_map(lambda p: grad_clip_factor * p, grads)
