@@ -41,7 +41,8 @@ codebase:
 - [MLP-Mixer: An all-MLP Architecture for Vision](https://arxiv.org/abs/2105.01601), by
   Ilya Tolstikhin*, Neil Houlsby*, Alexander Kolesnikov*, Lucas Beyer*,
   Xiaohua Zhai, Thomas Unterthiner, Jessica Yung, Andreas Steiner,
-  Daniel Keysers, Jakob Uszkoreit, Mario Lucic, Alexey Dosovitskiy
+  Daniel Keysers, Jakob Uszkoreit, Mario Lucic, Alexey Dosovitskiy\
+  Resources: [config](big_vision/configs/mlp_mixer_i1k.py).
 - [Better plain ViT baselines for ImageNet-1k](https://arxiv.org/abs/2205.01580), by
   Lucas Beyer, Xiaohua Zhai, Alexander Kolesnikov\
   Resources: [config](big_vision/configs/vit_s16_i1k.py)
@@ -109,11 +110,11 @@ evaluating classification models at scale on Cloud TPU VMs.
 We have since added the following key features and projects:
 - Patient and consistent distillation.
 - Scaling ViT.
+- MLP-Mixer.
 
 Features and projects we plan to release in the near future, in no particular
 order:
 - ImageNet-21k in TFDS.
-- MLP-Mixer.
 - Loading misc public models used in our publications (NFNet, MoCov3, DINO).
 - Contrastive Image-Text model training and evaluation as in LiT and CLIP.
 - UViM.
@@ -159,7 +160,7 @@ The following command line will create TPU VMs with 32 cores,
 4 hosts.
 
 ```
-gcloud alpha compute tpus tpu-vm create $NAME --zone $ZONE --accelerator-type v3-32 --version tpu-vm-tf-2.8.0
+gcloud alpha compute tpus tpu-vm create $NAME --zone $ZONE --accelerator-type v3-32 --version v2-tf-stable
 ```
 
 ## Install `big_vision` on TPU VMs
