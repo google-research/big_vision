@@ -4,5 +4,5 @@ einops
 flax
 git+https://github.com/deepmind/optax.git  # Needed for decay_rate_fn in scale_by_factored_rms
 tensorflow
-tensorflow_datasets
+tfds-nigthly
 tensorflow-addons

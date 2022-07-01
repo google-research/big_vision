@@ -16,6 +16,7 @@
 
 This is a basic variant of a training loop, good starting point for fancy ones.
 """
+# pylint: disable=consider-using-from-import
 from functools import partial
 import importlib
 import multiprocessing.pool
@@ -36,6 +37,7 @@ import jax.numpy as jnp
 from ml_collections import config_flags
 import numpy as np
 import optax
+import tensorflow as tf
 import tensorflow.io.gfile as gfile
 
 # pylint: disable=logging-fstring-interpolation
@@ -54,6 +56,7 @@ jax.config.parse_flags_with_absl()
 
 def main(argv):
   del argv
+  tf.config.experimental.set_visible_devices([], "GPU")
 
   config = flags.FLAGS.config
   workdir = flags.FLAGS.workdir

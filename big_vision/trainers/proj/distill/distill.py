@@ -25,7 +25,7 @@ are not necessary, and thus not (yet?) implemented in this codebase.
 Thus, for now, there are no extra learnable parameters besides the student.
 This keeps code relatively simple.
 """
-
+# pylint: disable=consider-using-from-import
 from functools import partial
 import importlib
 import multiprocessing.pool
@@ -47,6 +47,7 @@ import jax.numpy as jnp
 from ml_collections import config_flags
 import numpy as np
 import optax
+import tensorflow as tf
 import tensorflow.io.gfile as gfile
 
 # pylint: disable=logging-fstring-interpolation
@@ -72,6 +73,7 @@ def getfirst(d, *keys, default=None):
 
 def main(argv):
   del argv
+  tf.config.experimental.set_visible_devices([], "GPU")
 
   config = flags.FLAGS.config
   workdir = flags.FLAGS.workdir

@@ -21,7 +21,7 @@ see the tech report for more details.
 Command to run:
 
 big_vision.train \
-    --config big_vision/configs/ilsvrc_vit_s16.py \
+    --config big_vision/configs/vit_s16_i1k.py \
     --workdir gs://[your_bucket]/big_vision/`date '+%m-%d_%H%M'`
 
 To run for 300ep, add `--config.num_epochs 300` to the command.
