@@ -130,7 +130,7 @@ class Evaluator:
   def get_representation_fn(self, predict_fn, representation_layer):
     @functools.partial(jax.pmap, axis_name="batch")
     def _repr_fn(params, batch, labels, mask):
-      _, out = predict_fn(params, **batch)
+      *_, out = predict_fn(params, **batch)
       rep = u.tree_get(out, representation_layer)
       rep = jax.lax.all_gather(rep, "batch")
       labels = jax.lax.all_gather(labels, "batch")

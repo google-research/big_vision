@@ -155,8 +155,8 @@ def get_config(arg=None):
   config.shuffle_buffer_size = 50_000 if not arg.runlocal else 100
 
   config.log_training_steps = 10
-  config.checkpoint_steps = 1000
-  config.checkpoint_timeout = 600
+  config.ckpt_steps = 1000
+  config.ckpt_timeout = 600
 
   # Optimizer section
   config.optax_name = 'big_vision.momentum_hp'

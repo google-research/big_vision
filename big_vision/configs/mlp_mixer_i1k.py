@@ -60,8 +60,8 @@ def get_config(mode=None):
   config.shuffle_buffer_size = 250_000  # Per host, so small-ish is ok.
 
   config.log_training_steps = 50
-  config.checkpoint_steps = 1000
-  config.checkpoint_timeout = 1
+  config.ckpt_steps = 1000
+  config.ckpt_timeout = 1
 
   config.prefetch_to_device = 2
 

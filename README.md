@@ -47,17 +47,21 @@ codebase:
   Alexander Kolesnikov^*, André Susano Pinto^*, Lucas Beyer*, Xiaohua Zhai*, Jeremiah Harmsen*, Neil Houlsby*
 
 ### Multimodal research
+
 - [LiT: Zero-Shot Transfer with Locked-image Text Tuning](https://arxiv.org/abs/2111.07991), by
   Xiaohua Zhai*, Xiao Wang*, Basil Mustafa*, Andreas Steiner*, Daniel Keysers,
-  Alexander Kolesnikov, and Lucas Beyer*
+  Alexander Kolesnikov, and Lucas Beyer*\
+  Resources: [trainer](trainers/proj/image_text/contrastive.py), [config](configs/proj/image_text/lit_coco.py), [colab](https://colab.research.google.com/github/google-research/big_vision/blob/main/big_vision/configs/proj/image_text/lit.ipynb).
 
 ### Knowledge distillation
+
 - [Knowledge distillation: A good teacher is patient and consistent](https://arxiv.org/abs/2106.05237), by
   Lucas Beyer*, Xiaohua Zhai*, Amélie Royer*, Larisa Markeeva*, Rohan Anil,
   and Alexander Kolesnikov*\
   Resources: [README](big_vision/configs/proj/distill/README.md), [trainer](big_vision/trainers/proj/distill/distill.py), [colab](https://colab.research.google.com/drive/1nMykzUzsfQ_uAxfj3k35DYsATnG_knPl?usp=sharing).
 
 ### Misc
+
 - [Are we done with ImageNet?](https://arxiv.org/abs/2006.07159), by
   Lucas Beyer*, Olivier J. Hénaff*, Alexander Kolesnikov*, Xiaohua Zhai*,
   and Aäron van den Oord*
@@ -106,6 +110,7 @@ The first release contains the core part of pre-training, transferring, and
 evaluating classification models at scale on Cloud TPU VMs.
 
 We have since added the following key features and projects:
+- Contrastive Image-Text model training and evaluation as in LiT and CLIP.
 - Patient and consistent distillation.
 - Scaling ViT.
 - MLP-Mixer.
@@ -114,7 +119,6 @@ Features and projects we plan to release in the near future, in no particular
 order:
 - ImageNet-21k in TFDS.
 - Loading misc public models used in our publications (NFNet, MoCov3, DINO).
-- Contrastive Image-Text model training and evaluation as in LiT and CLIP.
 - UViM.
 - Memory-efficient Polyak-averaging implementation.
 - Advanced JAX compute and memory profiling. We are using internal tools for

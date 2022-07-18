@@ -48,8 +48,8 @@ def get_config(arg=None):
   config.shuffle_buffer_size = 250_000
 
   config.log_training_steps = 50
-  config.checkpoint_steps = 1000
-  config.keep_checkpoint_steps = 20000
+  config.ckpt_steps = 1000
+  config.keep_ckpt_steps = 20000
 
   # Model section
   config.student_name = 'bit_paper'

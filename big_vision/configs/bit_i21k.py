@@ -44,10 +44,10 @@ def get_config():
   config.shuffle_buffer_size = 250_000  # Per host, so small-ish is ok.
 
   config.log_training_steps = 50
-  config.checkpoint_steps = 1000
+  config.ckpt_steps = 1000
 
   # Model section
-  config.model_name = 'bit'
+  config.model_name = 'bit_paper'
   config.model = dict(depth=50, width=1.0)
 
   # Optimizer section
@@ -63,6 +63,7 @@ def get_config():
   eval_common = dict(
       type='classification',
       dataset=config.dataset,
+      data_dir=config.dataset_dir,
       pp_fn=pp_eval,
       loss_name=config.loss,
       log_steps=1000,  # Very fast O(seconds) so it's fine to run it often.

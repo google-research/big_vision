@@ -55,7 +55,7 @@ def get_config():
   pp_eval = 'decode|resize_small(256)|central_crop(224)' + pp_common
 
   config.log_training_steps = 50
-  config.checkpoint_steps = 1000
+  config.ckpt_steps = 1000
 
   # Model section
   config.model_name = 'vit'

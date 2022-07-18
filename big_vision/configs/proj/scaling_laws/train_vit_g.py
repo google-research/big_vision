@@ -26,7 +26,7 @@ big_vision.train \
     --workdir gs://[your_bucket]/big_vision/`date '+%m-%d_%H%M'`
 
 """
-from big_vision.configs.common_fewshot import get_fewshot
+from big_vision.configs.common_fewshot import get_fewshot_lsr
 import ml_collections as mlc
 
 
@@ -54,8 +54,8 @@ def get_config():
   config.log_eval_steps = 1000
   # NOTE: eval is very fast O(seconds) so it's fine to run it often.
 
-  config.checkpoint_steps = 1000
-  config.keep_checkpoint_steps = 10_000
+  config.ckpt_steps = 1000
+  config.keep_ckpt_steps = 10_000
 
   config.prefetch_to_device = 1
   config.trial = 0
@@ -81,7 +81,7 @@ def get_config():
   config.total_steps = 1_000_000
 
   # Few-shot eval section
-  config.fewshot = get_fewshot()
-  config.fewshot.log_steps = 10_000
+  config.evals = {}
+  config.evals.fewshot = dict(log_steps=10_000, **get_fewshot_lsr())
 
   return config

@@ -22,7 +22,9 @@ from typing import Optional, Sequence, Union
 from absl import logging
 from big_vision import utils
 from big_vision.models import common
+import flax
 import flax.linen as nn
+import flax.training.checkpoints
 import jax.numpy as jnp
 import numpy as np
 import scipy
@@ -81,19 +83,18 @@ class Encoder1DBlock(nn.Module):
   @nn.compact
   def __call__(self, x, deterministic=True):
     out = {}
-    y = nn.LayerNorm(name="LayerNorm_0")(x)
-    y = out["sa"] = nn.SelfAttention(
+    y = nn.LayerNorm()(x)
+    y = out["sa"] = nn.MultiHeadDotProductAttention(
         num_heads=self.num_heads,
         kernel_init=nn.initializers.xavier_uniform(),
         deterministic=deterministic,
-        name="MultiHeadDotProductAttention_1",
-    )(y)
+    )(y, y)
     y = nn.Dropout(rate=self.dropout)(y, deterministic)
     x = out["+sa"] = x + y
 
-    y = nn.LayerNorm(name="LayerNorm_2")(x)
+    y = nn.LayerNorm()(x)
     y = out["mlp"] = MlpBlock(
-        mlp_dim=self.mlp_dim, dropout=self.dropout, name="MlpBlock_3",
+        mlp_dim=self.mlp_dim, dropout=self.dropout,
     )(y, deterministic)
     y = nn.Dropout(rate=self.dropout)(y, deterministic)
     x = out["+mlp"] = x + y
@@ -275,6 +276,9 @@ def resample_posemb(old, new):
 def fix_old_checkpoints(params):
   """Fix small bwd incompat that can't be resolved with names in model def."""
 
+  params = flax.core.unfreeze(
+      flax.training.checkpoints.convert_pre_linen(params))
+
   # Original ViT paper variant had posemb in a module:
   if "posembed_input" in params["Transformer"]:
     logging.info("ViT: Loading and fixing VERY old posemb")
@@ -305,6 +309,8 @@ def fix_old_checkpoints(params):
         ["probe", "MlpBlock_0", "MultiHeadDotProductAttention_0", "LayerNorm_0"]
     }
 
+  return params
+
 
 def load(init_params, init_file, model_cfg, dont_load=()):  # pylint: disable=invalid-name because we had to CamelCase above.
   """Load init from checkpoint, both old model and this one. +Hi-res posemb."""
@@ -333,7 +339,7 @@ def load(init_params, init_file, model_cfg, dont_load=()):  # pylint: disable=in
   }.get(init_file, init_file)
   restored_params = utils.load_params(None, init_file)
 
-  fix_old_checkpoints(restored_params)
+  restored_params = fix_old_checkpoints(restored_params)
 
   # possibly use the random init for some of the params (such as, the head).
   restored_params = common.merge_params(restored_params, init_params, dont_load)

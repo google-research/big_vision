@@ -31,7 +31,7 @@ def get_eval_fn(predict_fn, loss_name):
   """Produces eval function, also applies pmap."""
   @partial(jax.pmap, axis_name='batch')
   def _eval_fn(params, batch, labels, mask):
-    logits, _ = predict_fn(params, **batch)
+    logits, *_ = predict_fn(params, **batch)
 
     # Ignore the entries with all zero labels for evaluation.
     mask *= labels.max(axis=1)
