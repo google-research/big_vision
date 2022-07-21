@@ -55,7 +55,7 @@ def get_config(mode=None):
   )
 
   config.batch_size = 4096
-  config.num_epochs = 300
+  config.total_epochs = 300
 
   config.shuffle_buffer_size = 250_000  # Per host, so small-ish is ok.
 
@@ -107,10 +107,10 @@ def get_config(mode=None):
   config.fewshot = get_fewshot_lsr()
 
   if mode == 'gpu8':
-    config.num_epochs = 60
+    config.total_epochs = 60
     config.batch_size = 512
     config.cache_raw = False
   if mode == 'regression_test':
-    config.num_epochs = 60
+    config.total_epochs = 60
 
   return config

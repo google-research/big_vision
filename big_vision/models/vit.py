@@ -162,13 +162,13 @@ class _Model(nn.Module):
   head_zeroinit: bool = True
 
   @nn.compact
-  def __call__(self, x, *, train=False):
+  def __call__(self, image, *, train=False):
     out = {}
 
     # Patch extraction
     x = out["stem"] = nn.Conv(
         self.width, self.patch_size, strides=self.patch_size,
-        padding="VALID", name="embedding")(x)
+        padding="VALID", name="embedding")(image)
 
     n, h, w, c = x.shape
     x = jnp.reshape(x, [n, h * w, c])

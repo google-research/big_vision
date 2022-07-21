@@ -13,6 +13,7 @@
 # limitations under the License.
 
 """Evaluator for the classfication task."""
+# pylint: disable=consider-using-from-import
 from functools import partial, lru_cache
 
 import big_vision.input_pipeline as input_pipeline

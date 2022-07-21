@@ -40,7 +40,7 @@ def get_config(runlocal=False):
 
   config.seed = 0
   config.batch_size = 4096 if not runlocal else 32
-  config.num_epochs = 90
+  config.total_epochs = 90
 
   pp_common = '|onehot(1000, key="{lbl}", key_result="labels")'
   pp_common += '|value_range(-1, 1)|keep("image", "labels")'

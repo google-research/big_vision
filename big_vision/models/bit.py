@@ -90,7 +90,7 @@ class Model(nn.Module):
   depth: Union[int, Sequence[int]] = 50
 
   @nn.compact
-  def __call__(self, x, *, train=False):
+  def __call__(self, image, *, train=False):
     del train  # Unused
     blocks = get_block_desc(self.depth)
     width = int(64 * self.width)
@@ -98,7 +98,7 @@ class Model(nn.Module):
     out = {}
 
     # Root block
-    x = StdConv(width, (7, 7), (2, 2), use_bias=False, name="conv_root")(x)
+    x = StdConv(width, (7, 7), (2, 2), use_bias=False, name="conv_root")(image)
     x = nn.GroupNorm(name="gn_root")(x)
     x = nn.relu(x)
     x = nn.max_pool(x, (3, 3), strides=(2, 2), padding="SAME")

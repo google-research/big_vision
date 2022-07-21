@@ -84,3 +84,44 @@ def merge_params(loaded, inited, dont_load=()):
            not_in_inited, indent=" + "))  # Special indent for tests.
 
   return u.recover_tree(merged.keys(), merged.values())
+
+
+class AddPositionEmbs(nn.Module):
+  """Adds positional embeddings to the inputs, supports caching for decode.
+
+  Attributes:
+    decode: whether to run in single-position autoregressive mode.
+  """
+  decode: bool = False
+
+  @nn.compact
+  def __call__(self, inputs, posemb):
+    """Applies AddPositionEmbs module.
+
+    Adds posemb to the inputs, supports single-position autoregressive mode.
+
+    Args:
+      inputs: input data [batch_size, seq_len, emb_dim].
+      posemb: positional embeddings.
+
+    Returns:
+      output: inputs modulated by pos-embeddings [batch_size, seq_len, emb_dim].
+    """
+    assert inputs.ndim == 3, f"Unexpected inputs shape: {inputs.shape}"
+    _, seq_len, emb_dim = inputs.shape
+    pe = posemb[:, :seq_len, :]
+
+    if self.decode:
+      is_initialized = self.has_variable("cache", "cache_index")
+      # We use a cache position index for tracking decoding position.
+      cache_index = self.variable("cache", "cache_index",
+                                  lambda: jnp.array(0, dtype=jnp.uint32))
+      if is_initialized:
+        i = cache_index.value
+        cache_index.value = i + 1
+        # Returns posemb[0, i, :], the positional embedding for the
+        # current decoding position.
+        pe = jax.lax.dynamic_slice(posemb,
+                                   start_indices=jnp.array((0, i, 0)),
+                                   slice_sizes=(1, 1, emb_dim))
+    return inputs + pe
