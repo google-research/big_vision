@@ -151,9 +151,9 @@ def main(argv):
       data_dir=fillin(config.get("dataset_dir")))
   steps_per_epoch = ntrain_img / batch_size
 
-  if config.get("num_epochs"):
-    total_steps = int(config.num_epochs * steps_per_epoch)
-    assert not config.get("total_steps"), "Set either num_epochs or total_steps"
+  if config.get("total_epochs"):
+    total_steps = int(config.total_epochs * steps_per_epoch)
+    assert not config.get("total_steps"), "Set only one of total_(epochs|steps)"
   else:
     total_steps = config.total_steps
 

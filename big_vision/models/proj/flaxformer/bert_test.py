@@ -46,7 +46,7 @@ class BertTest(tf.test.TestCase):
 
   @mock.patch("tensorflow_datasets.builder")
   def test_load_apply(self, mock_builder):
-    inkey = "texts"
+    inkey = "text"
     ds = tf.data.Dataset.from_tensor_slices(
         {inkey: tf.ragged.constant([["this is a test"]])})
     mock_builder.return_value.as_dataset.return_value = ds
@@ -63,12 +63,12 @@ class BertTest(tf.test.TestCase):
             "|keep('labels')"),
         batch_size=1,
     )
-    texts = jnp.array(next(iter(ds2))["labels"])
+    text = jnp.array(next(iter(ds2))["labels"])
     model = bert.Model(config="base")
-    variables = model.init(jax.random.PRNGKey(0), texts)
+    variables = model.init(jax.random.PRNGKey(0), text)
     params = bert.load(variables.unfreeze()["params"],
                        bert_test_util.create_base_checkpoint())
-    x, out = model.apply({"params": params}, texts)
+    x, out = model.apply({"params": params}, text)
     self.assertAllEqual(jax.tree_map(jnp.shape, x), (1, 768))
     self.assertAllEqual(
         jax.tree_map(jnp.shape, out), {

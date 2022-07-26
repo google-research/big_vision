@@ -36,10 +36,10 @@ class Model(nn.Module):
   temperature_init: float = 1.0
 
   @nn.compact
-  def __call__(self, images, texts=None, **kw):
+  def __call__(self, image, text=None, **kw):
     """Returns (B,C) image and (B,C) text representations."""
 
-    # Support calling without text or without images, for example for few-shot.
+    # Support calling without text or without image, for example for few-shot.
     ztxt, zimg = None, None
     out = {}
     out_dims = self.out_dim
@@ -47,13 +47,13 @@ class Model(nn.Module):
       out_dims = (out_dims, out_dims)
 
     # Embed the text:
-    if texts is not None:
+    if text is not None:
       text_model = importlib.import_module(
           f"{BASEDIR}.models.{self.text_model}"
       ).Model(**{"num_classes": out_dims[1], **(self.text or {})}, name="txt")
 
-    if texts is not None:
-      ztxt, out_txt = text_model(texts, **kw)
+    if text is not None:
+      ztxt, out_txt = text_model(text, **kw)
       for k, v in out_txt.items():
         out[f"txt/{k}"] = v
 
@@ -61,11 +61,11 @@ class Model(nn.Module):
       out["txt/norm"] = jnp.linalg.norm(ztxt, axis=1, keepdims=True)
       out["txt/normalized"] = ztxt = ztxt / (out["txt/norm"] + 1e-8)
 
-    if images is not None:
+    if image is not None:
       image_model = importlib.import_module(
           f"{BASEDIR}.models.{self.image_model}"
       ).Model(**{"num_classes": out_dims[0], **(self.image or {})}, name="img")  # pylint: disable=not-a-mapping
-      zimg, out_img = image_model(images, **kw)
+      zimg, out_img = image_model(image, **kw)
       for k, v in out_img.items():
         out[f"img/{k}"] = v
 

@@ -66,7 +66,7 @@ def main(argv):
   mw = u.BigVisionMetricWriter(xid, wid, workdir, config)
 
   write_note(f"Initializing {config.model_name} model...")
-  assert config.get("model", {}).get("reinit") is None, (
+  assert config.get("model.reinit") is None, (
       "I don't think you want any part of the model to be re-initialized.")
   model_mod = importlib.import_module(f"big_vision.models.{config.model_name}")
   model_kw = dict(config.get("model", {}))
