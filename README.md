@@ -45,13 +45,14 @@ codebase:
   Resources: [config](big_vision/configs/vit_s16_i1k.py)
 - [UViM: A Unified Modeling Approach for Vision with Learned Guiding Codes](https://arxiv.org/abs/2205.10337), by
   Alexander Kolesnikov^*, André Susano Pinto^*, Lucas Beyer*, Xiaohua Zhai*, Jeremiah Harmsen*, Neil Houlsby*
+  Resources: [readme](big_vision/configs/proj/uvim/README.md) [configs](big_vision/configs/proj/uvim), [colabs](big_vision/configs/proj/uvim).
 
 ### Multimodal research
 
 - [LiT: Zero-Shot Transfer with Locked-image Text Tuning](https://arxiv.org/abs/2111.07991), by
   Xiaohua Zhai*, Xiao Wang*, Basil Mustafa*, Andreas Steiner*, Daniel Keysers,
   Alexander Kolesnikov, and Lucas Beyer*\
-  Resources: [trainer](trainers/proj/image_text/contrastive.py), [config](configs/proj/image_text/lit_coco.py), [colab](https://colab.research.google.com/github/google-research/big_vision/blob/main/big_vision/configs/proj/image_text/lit.ipynb).
+  Resources: [trainer](big_vision/trainers/proj/image_text/contrastive.py), [config](big_vision/configs/proj/image_text/lit_coco.py), [colab](https://colab.research.google.com/github/google-research/big_vision/blob/main/big_vision/configs/proj/image_text/lit.ipynb).
 
 ### Knowledge distillation
 
@@ -114,12 +115,12 @@ We have since added the following key features and projects:
 - Patient and consistent distillation.
 - Scaling ViT.
 - MLP-Mixer.
+- UViM.
 
 Features and projects we plan to release in the near future, in no particular
 order:
 - ImageNet-21k in TFDS.
 - Loading misc public models used in our publications (NFNet, MoCov3, DINO).
-- UViM.
 - Memory-efficient Polyak-averaging implementation.
 - Advanced JAX compute and memory profiling. We are using internal tools for
     this, but may eventually add support for the publicly available ones.

@@ -133,12 +133,12 @@ class Model(nn.Module):
   depth: Union[int, Sequence[int]] = 50  # 5/101/152, or list of block depths.
 
   @nn.compact
-  def __call__(self, x, *, train=False):
+  def __call__(self, image, *, train=False):
     blocks = bit.get_block_desc(self.depth)
     width = int(64 * self.width)
     out = {}
 
-    x = out['stem'] = RootBlock(width=width, name='root_block')(x)
+    x = out['stem'] = RootBlock(width=width, name='root_block')(image)
 
     # Blocks
     x, out['stage1'] = ResNetStage(blocks[0], nmid=width, name='block1')(x)

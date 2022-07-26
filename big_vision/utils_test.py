@@ -20,6 +20,7 @@ from big_vision import utils
 import chex
 import flax
 import jax
+import jax.numpy as jnp
 import numpy as np
 import tensorflow as tf
 
@@ -195,6 +196,43 @@ class TreeTest(tf.test.TestCase):
     self.assertEqual(utils.tree_get(tree, 'a'), tree['a'])
     self.assertEqual(utils.tree_get(tree, 'b'), tree['b'])
 
+  def test_tree_replace(self):
+    tree = {'a': {'b': 2, 'c': 3}, 'c': 4}
+    replacements = {
+        'a/b': 'a/b/x',  # replaces 'a/b' with 'a/b/x'
+        '.*c': 'C',      # replaces 'c' with 'C' ('a/c' is removed)
+        'C': 'D',        # replaces 'C' (which was 'c') with 'D'
+        '.*/c': None,    # removes 'a/c'
+    }
+    tree2 = utils.tree_replace(tree, replacements)
+    self.assertEqual(tree2, {'D': 4, 'a': {'b': {'x': 2}}})
+
+  def test_tree_compare(self):
+    tree1_only, tree2_only, dtype_shape_mismatch = utils.tree_compare(
+        {'a': {'b': jnp.array(2), 'c': jnp.array(3)}},
+        {'a': {'B': jnp.array(2), 'c': jnp.array(3.)}},
+    )
+    self.assertEqual(tree1_only, {'a/b'})
+    self.assertEqual(tree2_only, {'a/B'})
+    self.assertEqual(
+        dtype_shape_mismatch,
+        {'a/c': [(jnp.dtype('int32'), ()), (jnp.dtype('float32'), ())]})
+
+
+class StepConversionTest(parameterized.TestCase, tf.test.TestCase):
+
+  @parameterized.named_parameters(
+      ('nice_steps', 1000, 100, dict(foo_steps=3), 3),
+      ('nice_epochs', 1000, 100, dict(foo_epochs=3), 30),
+      ('nice_examples', 1000, 100, dict(foo_examples=300), 3),
+      ('offbyone_steps', 1001, 100, dict(foo_steps=3), 3),
+      ('offbyone_epochs', 1001, 100, dict(foo_epochs=3), 30),
+      ('offbyone_examples', 1001, 100, dict(foo_examples=300), 3),
+  )
+  def test_steps(self, data_size, batch_size, cfg, expected):
+    step = utils.steps('foo', cfg, data_size=data_size, batch_size=batch_size)
+    self.assertAlmostEqual(step, expected)
+
 
 class CreateLearningRateScheduleTest(parameterized.TestCase, tf.test.TestCase):
 
@@ -210,9 +248,8 @@ class CreateLearningRateScheduleTest(parameterized.TestCase, tf.test.TestCase):
   )
   def test_schedule(self, decay_type, extra_kwargs, step, expected_lr):
     lr_fn = utils.create_learning_rate_schedule(
-        global_batch_size=512,
         total_steps=21,
-        steps_per_epoch=None,
+        batch_size=512,
         base=.5,
         decay_type=decay_type,
         scale_with_batchsize=True,

@@ -101,8 +101,8 @@ def main(argv):
   write_note("Replicating...")
   params_repl = flax_utils.replicate(params_cpu)
 
-  def predict_fn(params, image, *args):
-    return model.apply({"params": params}, image, *args)
+  def predict_fn(params, *a, **kw):
+    return model.apply({"params": params}, *a, **kw)
 
   evaluators = eval_common.from_config(
       config, {"predict": predict_fn, "model": model},

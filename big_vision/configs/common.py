@@ -117,3 +117,8 @@ def autotype(x):
       return float(x)  # Returns as float.
     except ValueError:
       return x  # Returns as str.
+
+
+def pack_arg(**kw):
+  """Packs key-word args as a string to be parsed by `parse_arg()`."""
+  return ','.join([f'{k}={v}' for k, v in kw.items()])

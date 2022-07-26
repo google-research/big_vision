@@ -24,7 +24,7 @@ big_vision.train \
     --config big_vision/configs/vit_s16_i1k.py \
     --workdir gs://[your_bucket]/big_vision/`date '+%m-%d_%H%M'`
 
-To run for 300ep, add `--config.num_epochs 300` to the command.
+To run for 300ep, add `--config.total_epochs 300` to the command.
 """
 
 import ml_collections as mlc
@@ -41,7 +41,7 @@ def get_config():
   config.num_classes = 1000
   config.loss = 'softmax_xent'
   config.batch_size = 1024
-  config.num_epochs = 90
+  config.total_epochs = 90
 
   pp_common = (
       '|value_range(-1, 1)'

@@ -66,10 +66,10 @@ class MlpMixer(nn.Module):
   stoch_depth: float = 0.0
 
   @nn.compact
-  def __call__(self, inputs, *, train=False):
+  def __call__(self, image, *, train=False):
     out = {}
     x = out["stem"] = nn.Conv(self.hidden_dim, self.patch_size,
-                              strides=self.patch_size, name="stem")(inputs)
+                              strides=self.patch_size, name="stem")(image)
     x = out["input_tokens"] = einops.rearrange(x, "n h w c -> n (h w) c")
     for i in range(self.num_blocks):
       drop_p = (i / max(self.num_blocks - 1, 1)) * self.stoch_depth

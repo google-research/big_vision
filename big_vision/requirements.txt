@@ -4,7 +4,9 @@ einops
 flax
 git+https://github.com/google/flaxformer
 git+https://github.com/deepmind/optax.git  # Needed for decay_rate_fn in scale_by_factored_rms
+git+https://github.com/akolesnikoff/panopticapi.git@mute
 tensorflow
 tfds-nightly
 tensorflow-addons
 tensorflow-text
+tensorflow-gan

@@ -106,7 +106,7 @@ def pad_shard_unpad(wrapped, static_argnums=(0,), static_argnames=()):
     def unpad(x):
       # Transfer back before cutting, to reduce on-device shape diversity.
       return einops.rearrange(jax.device_get(x), "d b ... -> (d b) ...")[:b]
-    return jax.tree_map(unpad, out)
+    return jax.tree_util.tree_map(unpad, out)
 
   return pad_shard_unpad_wrapper
 
@@ -119,6 +119,10 @@ def onehot(labels, num_classes, on_value=1.0, off_value=0.0):
 
 
 def npload(fname):
+  # Use local paths directly if possible:
+  if os.path.exists(fname):
+    return dict(np.load(fname, allow_pickle=False))
+  # For other paths go via gfile+BytesIO since np.load requires seeks.
   with gfile.GFile(fname, "rb") as f:
     data = f.read()
   return dict(np.load(io.BytesIO(data), allow_pickle=False))
@@ -296,9 +300,9 @@ def accumulate_gradient(loss_and_grad_fn, params, images, labels, accum_steps):
                                    (step_size, labels.shape[1]))
       li, gi = loss_and_grad_fn(params, imgs, lbls)
       l, g = l_and_g
-      return (l + li, jax.tree_map(lambda x, y: x + y, g, gi))
+      return (l + li, jax.tree_util.tree_map(lambda x, y: x + y, g, gi))
     l, g = jax.lax.fori_loop(1, accum_steps, acc_grad_and_loss, (l, g))
-    return jax.tree_map(lambda x: x / accum_steps, (l, g))
+    return jax.tree_util.tree_map(lambda x: x / accum_steps, (l, g))
   else:
     return loss_and_grad_fn(params, images, labels)
 
@@ -489,7 +493,7 @@ def _traverse_with_names(tree, with_inner_nodes=False):
     tree = flax.serialization.to_state_dict(tree)
   # Don't output the non-leaf nodes. If the optimizer doesn't have a state
   # the tree leaves can be Nones which was interpreted as a leaf by this
-  # function but not by the other functions (like jax.tree_map).
+  # function but not by the other functions (like jax.tree_util.tree_map).
   if tree is None:
     return
   elif isinstance(tree, Mapping):
@@ -538,8 +542,13 @@ def tree_flatten_with_names(tree):
   return [(val_names[i], v) for i, v in zip(inv_perm, vals)], tree_def
 
 
+def tree_unflatten(names_and_vals):
+  """Reverses `tree_flatten_with_names(tree)[0]`."""
+  return recover_tree(*zip(*names_and_vals))
+
+
 def tree_map_with_names(f, tree, *rest):
-  """Like jax.tree_map but with a filter on the leaf path name.
+  """Like jax.tree_util.tree_map but with a filter on the leaf path name.
 
   Args:
     f: A function with first parameter `name` (path-like "a/b/c") and remaining
@@ -615,6 +624,67 @@ def tree_get(tree, name):
     raise KeyError(Msg(msg)) from e
 
 
+def tree_replace(tree, replacements):
+  """Renames/removes (nested) keys.
+
+  Example usage:
+
+    tree = {'a': {'b': 2, 'c': 3}, 'c': 4}
+    replacements = {
+        'a/b': 'a/b/x',  # replaces 'a/b' with 'a/b/x'
+        '.*c': 'C',      # replaces 'c' with 'C' ('a/c' is removed)
+        'C': 'D',        # replaces 'C' (which was 'c') with 'D'
+        '.*/c': None,    # removes 'a/c'
+    }
+    tree2 = rename_remove(tree, replacements)
+    assert tree2 == {'D': 4, 'a': {'b': {'x': 2}}}
+
+  Args:
+    tree: A nested dictionary.
+    replacements: Rules specifying `regex` as keys and `replacement` as values
+      to be used with `m = re.match(regex, key)` and `m.expand(replacement)`
+      for every `key` independently.
+
+      Note that:
+      1. If any rule matches with `replacement=None`, then the key is removed.
+      2. The rules are applied in order. It's possible to have multiple
+         transformations on a single key.
+
+  Returns:
+    Updated `tree` according to rules defined in `replacements`.
+  """
+  replacements = {
+      re.compile(kk): vv for kk, vv in replacements.items()
+  }
+
+  def rename(k):
+    for kk, vv in replacements.items():
+      m = kk.match(k)
+      if m:
+        k = k[:m.start()] + m.expand(vv) + k[m.end():]
+    return k
+
+  def should_remove(k):
+    return any(vv is None and kk.match(k) for kk, vv in replacements.items())
+
+  names_and_vals, _ = tree_flatten_with_names(tree)
+  names_and_vals = [
+      (rename(k), v) for k, v in names_and_vals if not should_remove(k)
+  ]
+  return tree_unflatten(names_and_vals)
+
+
+def tree_compare(tree1, tree2):
+  """Returns `(tree1_only, tree2_only, dtype_shape_mismatch)`."""
+  tree1 = flax.traverse_util.flatten_dict(tree1, sep="/")
+  tree2 = flax.traverse_util.flatten_dict(tree2, sep="/")
+  return set(tree1) - set(tree2), set(tree2) - set(tree1), {
+      k: [(v.dtype, v.shape), (tree2[k].dtype, tree2[k].shape)]
+      for k, v in tree1.items()
+      if k in tree2 and (v.dtype != tree2[k].dtype or v.shape != tree2[k].shape)
+  }
+
+
 def recover_dtype(a):
   """Numpy's `save` stores bfloat16 type as "void" type, so we recover it."""
   if hasattr(a, "dtype") and a.dtype.type is np.void:
@@ -685,44 +755,84 @@ def recover_tree(keys, values):
   return tree
 
 
+def steps(prefix, config, data_size=None, batch_size=None, default=ValueError):
+  """Gets duration named `prefix` out of `config` and converts it to steps.
+
+  Using this function to access a configuration value that denotes some kind
+  of duration (eg training time, warmup, checkpoint frequency, ...) allows the
+  duration to be specified in terms of steps, epochs, or examples, and converts
+  any of these into steps, such that the training code only deals with steps.
+
+  Args:
+    prefix: The name of the duration to query. The actual config fields can
+      then be one of `prefix_steps`, `prefix_examples`, or `prefix_epochs`.
+    config: The dictionary (config) from which to read the duration.
+    data_size: The total number of training examples in one epoch.
+    batch_size: The number of examples processed per step.
+    default: The default value to return when no duration of the name `prefix`
+      is found in the `config`. Set to `ValueError` (the default) to raise an
+      error instead of returning a default value.
+
+  Returns:
+    The number of steps from the config, or the default value.
+
+  Raises:
+    ValueError if there is no such duration in the config and no default is set.
+  """
+  # Be helpful and make sure only one of _steps, _epochs, _examples is defined.
+  msg = f"Only one of {prefix}_(steps,examples,epochs) should be defined."
+  assert (int(f"{prefix}_steps" in config) +
+          int(f"{prefix}_examples" in config) +
+          int(f"{prefix}_epochs" in config)) <= 1, msg
+
+  # Boy do I anticipate the walrus operator...
+  if f"{prefix}_steps" in config:
+    return config[f"{prefix}_steps"]
+
+  if batch_size and f"{prefix}_examples" in config:
+    return config[f"{prefix}_examples"] // batch_size
+
+  if batch_size and data_size and f"{prefix}_epochs" in config:
+    steps_per_epoch = data_size / batch_size
+    return int(config[f"{prefix}_epochs"] * steps_per_epoch)
+
+  if default is ValueError:
+    raise ValueError(
+        f"Cannot convert {prefix} to steps, due to missing batch_size "
+        f"({batch_size}), data_size ({data_size}), or corresponding entry in "
+        "config:\n" + "\n".join(config.keys()))
+
+  return default
+
+
 def create_learning_rate_schedule(
-    global_batch_size, total_steps, steps_per_epoch=None,
-    base=0.0, decay_type="stair",
-    scale_with_batchsize=False,
-    warmup_steps=0, cooldown_steps=0,
-    warmup_epochs=0, cooldown_epochs=0,
-    **kw):
+    total_steps, batch_size=None, data_size=None,
+    base=1.0, decay_type="stair",
+    scale_with_batchsize=False, **kw):
   """Creates learning rate schedule, see (internal link)
 
   Args:
-    global_batch_size: The global batch-size optionally used for scaling.
     total_steps: The total number of steps to run.
-    steps_per_epoch: How many steps form an epoch. Needed only if anything is
-      passed in terms of epochs.
+    batch_size: The global batch-size optionally used for scaling.
+    data_size: Number of examples in the training data (for epoch conversion).
     base: The starting learning-rate (without warmup).
     decay_type: 'linear' or 'cosine', 'rsqrt', 'stair'.
     scale_with_batchsize: Whether or not to scale lr automatically.
-    warmup_steps: how many steps to warm up for.
-    cooldown_steps: how many steps to cool down for.
-    warmup_epochs: how many epochs to warm up for.
-    cooldown_epochs: how many epochs to cool down for.
-    **kw: extra arguments specific to individual decay_types.
+    **kw: extra arguments specific to individual decay_types. Also contains
+      declaration of `{warmup,cooldown}_{steps,epochs,examples}` that applies
+      on top of any/all decay_type.
 
   Returns:
     A function learning_rate(step): float -> {"learning_rate": float}.
   """
 
-  # For convenience, convert {warmup,cooldown}_epochs to _steps.
-  assert bool(warmup_epochs) + bool(warmup_steps) < 2, "Only one!"
-  assert bool(cooldown_epochs) + bool(cooldown_steps) < 2, "Only one!"
-  if warmup_epochs:
-    warmup_steps = warmup_epochs * steps_per_epoch
+  warmup_steps = steps("warmup", kw, data_size, batch_size, default=0)
+  cooldown_steps = steps("cooldown", kw, data_size, batch_size, default=0)
+
   # Early catch hard to backtrack errors due to warmup_steps >= total_steps,
   # but let it run for 0 and 1 steps used to eval and debug runs.
   assert (total_steps <= 1) or (warmup_steps < total_steps), (
       "warmup_steps is >= total_steps")
-  if cooldown_epochs:
-    cooldown_steps = cooldown_epochs * steps_per_epoch
 
   def step_fn(step):
     """Step to learning rate function."""
@@ -733,7 +843,7 @@ def create_learning_rate_schedule(
     # The reference batch size in literature is 256, so we scale the lr to
     # adjust to the literature lr when bach_size changes.
     if scale_with_batchsize:
-      lr = lr * global_batch_size / 256.0
+      lr = lr * batch_size / 256.0
 
     progress = (step - warmup_steps) / float(total_steps - warmup_steps)
     progress = jnp.clip(progress, 0.0, 1.0)
@@ -848,7 +958,7 @@ def make_mask_trees(tree, patterns, *, log=None):
 
   multimask = tree_map_with_names(matchfirst, tree)
   return [
-      jax.tree_map(lambda matches, i=idx: matches[i], multimask)
+      jax.tree_util.tree_map(lambda matches, i=idx: matches[i], multimask)
       for idx in range(len(patterns))
   ]
 

@@ -36,11 +36,14 @@ def get_config():
 
   config.trial = 0
   config.batch_size = 4096
-  config.num_epochs = 90
+  config.total_epochs = 90
 
-  pp_common = f'|value_range(-1, 1)|onehot({config.num_classes})'
-  config.pp_train = 'decode_jpeg_and_inception_crop(224)|flip_lr' + pp_common
-  pp_eval = 'decode|resize_small(256)|central_crop(224)' + pp_common
+  pp_common = '|value_range(-1, 1)|onehot({onehot_args})|keep("image", "labels")'
+  pp_common_i21k = pp_common.format(onehot_args=f'{config.num_classes}')
+  pp_common_i1k = pp_common.format(onehot_args='1000, key="label", key_result="labels"')
+  config.pp_train = 'decode_jpeg_and_inception_crop(224)|flip_lr' + pp_common_i21k
+  pp_eval = 'decode|resize_small(256)|central_crop(224)' + pp_common_i21k
+  pp_eval_i1k = 'decode|resize_small(256)|central_crop(224)' + pp_common_i1k
   config.shuffle_buffer_size = 250_000  # Per host, so small-ish is ok.
 
   config.log_training_steps = 50
@@ -63,7 +66,6 @@ def get_config():
   eval_common = dict(
       type='classification',
       dataset=config.dataset,
-      data_dir=config.dataset_dir,
       pp_fn=pp_eval,
       loss_name=config.loss,
       log_steps=1000,  # Very fast O(seconds) so it's fine to run it often.
@@ -72,6 +74,8 @@ def get_config():
   config.evals.test = {**eval_common, 'split': 'full[:25_600]'}
   config.evals.val = {**eval_common, 'split': 'full[25_600:51_200]'}
   config.evals.train = {**eval_common, 'split': 'full[51_200:76_800]'}
+
+  # Few-shot evaluators
   config.evals.fewshot = get_fewshot_lsr()
   config.evals.fewshot.log_steps = 25_000
 
