@@ -38,20 +38,20 @@ class Model(nn.Module):
   head_zeroinit: bool = True
 
   @nn.compact
-  def __call__(self, texts, *, train=False):
+  def __call__(self, text, *, train=False):
     out = {}
 
-    batch_size, max_len = texts.shape
+    batch_size, max_len = text.shape
     bert_model = bert.BertEncoder(**dataclasses.asdict({
         "base": configs.BertBaseConfig(),
         "large": configs.BertLargeConfig(),
     }[self.config]))
     x = out["transformed"] = bert_model(
-        token_ids=texts,
+        token_ids=text,
         position_ids=jnp.tile(
             jnp.arange(0, max_len, dtype=jnp.int32), [batch_size, 1]),
         segment_ids=jnp.zeros([batch_size, max_len], dtype=jnp.int32),
-        input_mask=texts.astype(jnp.bool_).astype(jnp.int32),
+        input_mask=text.astype(jnp.bool_).astype(jnp.int32),
         enable_dropout=train,
     )
 
