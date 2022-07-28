@@ -45,7 +45,7 @@ codebase:
   Resources: [config](big_vision/configs/vit_s16_i1k.py)
 - [UViM: A Unified Modeling Approach for Vision with Learned Guiding Codes](https://arxiv.org/abs/2205.10337), by
   Alexander Kolesnikov^*, André Susano Pinto^*, Lucas Beyer*, Xiaohua Zhai*, Jeremiah Harmsen*, Neil Houlsby*
-  Resources: [readme](big_vision/configs/proj/uvim/README.md) [configs](big_vision/configs/proj/uvim), [colabs](big_vision/configs/proj/uvim).
+  Resources: [readme](big_vision/configs/proj/uvim/README.md), [configs](big_vision/configs/proj/uvim), [colabs](big_vision/configs/proj/uvim).
 
 ### Multimodal research
 
