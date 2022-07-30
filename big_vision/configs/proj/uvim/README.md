@@ -19,14 +19,14 @@ different tasks: panoptic segmentation, colorization and depth prediction.
 | Depth                 | UViM Stage I model  | [NYU Depth V2](https://cs.nyu.edu/~silberman/datasets/nyu_depth_v2.html) |  0.155 RMSE  | [link](https://storage.googleapis.com/big_vision/uvim/depth_stageI_params.npz)            |
 | Depth                 | UViM Stage II model | [NYU Depth V2](https://cs.nyu.edu/~silberman/datasets/nyu_depth_v2.html) |  0.463 RMSE  | [link](https://storage.googleapis.com/big_vision/uvim/depth_stageII_params.npz)           |
 
-All of this models can be interactively explored in our [colabs](configs/proj/uvim).
+All of this models can be interactively explored in our [colabs](/big_vision/configs/proj/uvim).
 
 ## Running on a single-host TPU machine
 
 Below we provide instructions on how to run UViM training (stage I and
 stage II) using a single TPU host with 8 TPU accelerators. These instructions
 can be easily adapted to a GPU host and multi-host TPU setup, see the main
-`big_vision` [README file](README.md).
+`big_vision` [README file](/README.md).
 
 We assume that the user has already created and `ssh`-ed to the TPU host
 machine. The next step is to clone `big_vision` repository:
