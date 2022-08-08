@@ -38,7 +38,7 @@ import ml_collections as mlc
 
 def get_config(arg=None):
   """Config for training."""
-  arg = bvcc.parse_arg(arg, variant='B/16', runlocal=False, aug='')
+  arg = bvcc.parse_arg(arg, variant='B/32', runlocal=False, aug='')
   config = mlc.ConfigDict()
 
   config.dataset = 'imagenet2012'
