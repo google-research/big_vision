@@ -290,7 +290,7 @@ def main(argv):
           params_repl, opt_repl, rngs_loop,
           train_batch["image"],
           train_batch["labels"],
-          step)
+          flax.jax_utils.replicate(step))
 
     # On the first host, let's always profile a handful of early steps.
     if jax.process_index() == 0:

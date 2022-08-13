@@ -18,18 +18,12 @@ r"""Pre-training ViT on ILSVRC-2012 as in https://arxiv.org/abs/2203.08065
 This configuration makes use of the "arg" to get_config to select which model
 to run, so a few examples are given below:
 
-Run training of a B/16 model:
+Run training of a B/32 model:
 
-big_vision.train \
-    --config big_vision/configs/vit_i1k.py:variant=B/16 \
+big_vision.trainers.proj.gsam.train \
+    --config big_vision/configs/proj/gsam/vit_i1k_gsam_no_aug.py \
     --workdir gs://[your_bucket]/big_vision/`date '+%m-%d_%H%M'`
 
-Run training of a B/32 model without aug-strenght and 300ep:
-
-big_vision.train \
-    --config big_vision/configs/vit_i1k.py:variant=B/32,aug=none \
-    --workdir gs://[your_bucket]/big_vision/`date '+%m-%d_%H%M'` \
-    --config.num_epochs 300
 """
 
 import big_vision.configs.common as bvcc
@@ -38,7 +32,7 @@ import ml_collections as mlc
 
 def get_config(arg=None):
   """Config for training."""
-  arg = bvcc.parse_arg(arg, variant='B/16', runlocal=False, aug='')
+  arg = bvcc.parse_arg(arg, variant='B/32', runlocal=False)
   config = mlc.ConfigDict()
 
   config.dataset = 'imagenet2012'
@@ -55,11 +49,10 @@ def get_config(arg=None):
       '|onehot(1000, key="{lbl}", key_result="labels")'
       '|keep("image", "labels")'
   )
-  config.pp_train = (
-      'decode_jpeg_and_inception_crop(224)|flip_lr|' +
-      pp_common.format(lbl='label')
-  )
   pp = 'decode|resize_small(256)|central_crop(224)' + pp_common
+  
+  LS = 1e-4
+  config.pp_train = f'decode|resize_small(256)|central_crop(224)|flip_lr|value_range(-1, 1)|onehot({config.num_classes}, key="label", key_result="labels", on={1.0-LS}, off={LS})|keep("image", "labels")'   # pylint: disable=line-too-long
 
   # Aggressive pre-fetching because our models here are small, so we not only
   # can afford it, but we also need it for the smallest models to not be
@@ -77,11 +70,12 @@ def get_config(arg=None):
       rep_size=False,
       pool_type='gap',
   )
+  config.init_head_bias = -10.0
 
   # Optimizer section
   config.grad_clip_norm = 1.0
   config.optax_name = 'scale_by_adam'
-  config.optax = dict(mu_dtype='bfloat16')
+  config.optax = dict(mu_dtype='float32')
   # The modified AdaFactor we introduced in https://arxiv.org/abs/2106.04560
   # almost always behaves exactly like adam, but at a fraction of the memory
   # cost (specifically, adam_bf16 = +1.5M, adafactor = +0.5M), hence it is a
@@ -106,12 +100,14 @@ def get_config(arg=None):
       alpha=0.6,
       adaptive_perturbation=False,
       minimize_fp=True,
+      lr_max=config.get_ref('lr'),
+      lr_min=config.schedule.get_ref('linear_end'),
   )
 
   # Eval section
   eval_common = dict(
       type='classification',
-      dataset='imagenet2012',
+      dataset='cifar100',
       pp_fn=pp.format(lbl='label'),
       loss_name=config.loss,
       log_steps=2500,  # Very fast O(seconds) so it's fine to run it often.
@@ -121,11 +117,6 @@ def get_config(arg=None):
   config.evals.minival = {**eval_common, 'split': 'train[99%:]'}
   config.evals.val = {**eval_common, 'split': 'validation'}
   config.evals.v2 = {**eval_common, 'dataset': 'imagenet_v2', 'split': 'test'}
-
-  config.evals.real = {**eval_common}
-  config.evals.real.dataset = 'imagenet2012_real'
-  config.evals.real.split = 'validation'
-  config.evals.real.pp_fn = pp.format(lbl='real_label')
 
   config.fewshot = get_fewshot_lsr(runlocal=arg.runlocal)
   config.fewshot.log_steps = 10_000
