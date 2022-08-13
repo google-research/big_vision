@@ -52,7 +52,7 @@ def get_config(arg=None):
   pp = 'decode|resize_small(256)|central_crop(224)' + pp_common
   
   LS = 1e-4
-  config.pp_train = f'decode_jpeg_and_inception_crop(224)|flip_lr|value_range(-1, 1)|onehot({config.num_classes}, key="label", key_result="labels", on={1.0-LS}, off={LS})|keep("image", "labels")'   # pylint: disable=line-too-long
+  config.pp_train = f'decode|resize_small(256)|central_crop(224)|flip_lr|value_range(-1, 1)|onehot({config.num_classes}, key="label", key_result="labels", on={1.0-LS}, off={LS})|keep("image", "labels")'   # pylint: disable=line-too-long
 
   # Aggressive pre-fetching because our models here are small, so we not only
   # can afford it, but we also need it for the smallest models to not be
@@ -100,6 +100,8 @@ def get_config(arg=None):
       alpha=0.6,
       adaptive_perturbation=False,
       minimize_fp=True,
+      lr_max=config.get_ref('lr'),
+      lr_min=config.schedule.get_ref('linear_end'),
   )
 
   # Eval section

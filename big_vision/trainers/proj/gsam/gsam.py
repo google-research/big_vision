@@ -40,7 +40,7 @@ def gsam_gradient(loss_fn, params, inputs, targets,
   Note:
     Setting `rho_max=rho_min` and `alpha=0` reduces GSAM to SAM.
   """
-  l_clean, g_clean = jax.value_and_grad(loss_fn)(base_opt.target, inputs, targets)
+  l_clean, g_clean = jax.value_and_grad(loss_fn)(params, inputs, targets)
   g_clean_normalized, g_clean_length = dual_vector(g_clean)
 
   if lr_max == lr_min:
