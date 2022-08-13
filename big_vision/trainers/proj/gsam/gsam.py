@@ -60,13 +60,13 @@ def gsam_gradient(loss_fn, base_opt, inputs, targets,
   l_robust, g_robust = jax.value_and_grad(loss_fn)(param_sam, inputs, targets)
 
   # Decompose gradients.
-  g_clean_flatten, _ = jax.tree_flatten(g_clean)
-  g_robust_flatten, _ = jax.tree_flatten(g_robust)
+  g_clean_flatten, _ = jax.tree_util.tree_flatten(g_clean)
+  g_robust_flatten, _ = jax.tree_util.tree_flatten(g_robust)
 
   if minimize_fp:
     # Decompose g_clean onto parallel and vertical to g_robust.
     g_robust_normalized, g_robust_length = dual_vector(g_robust)
-    g_robust_normalized_flatten, _ = jax.tree_flatten(g_robust_normalized)
+    g_robust_normalized_flatten, _ = jax.tree_util.tree_flatten(g_robust_normalized)
 
     g_clean_projection_norm = sum([jnp.vdot(p, q) for (p,q) in
         zip(g_robust_normalized_flatten, g_clean_flatten)])
@@ -79,7 +79,7 @@ def gsam_gradient(loss_fn, base_opt, inputs, targets,
   else:
     # Decompose g_robust onto parallel and vertical to g_clean.
     g_clean_normalized, g_clean_length = dual_vector(g_clean)
-    g_clean_normalized_flatten, _ = jax.tree_flatten(g_clean_normalized)
+    g_clean_normalized_flatten, _ = jax.tree_util.tree_flatten(g_clean_normalized)
 
     g_robust_projection_norm = sum([jnp.vdot(p, q) for (p,q) in
         zip(g_clean_normalized_flatten, g_robust_flatten)])
