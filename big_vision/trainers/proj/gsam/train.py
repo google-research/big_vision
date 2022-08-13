@@ -206,7 +206,7 @@ def main(argv):
           logits=logits, labels=labels)
 
     learning_rate = sched_fns[0](step)
-    l, grads = gsam_gradient(loss_fn=loss_fn, base_opt=opt, inputs=images, targets=labels,
+    l, grads = gsam_gradient(loss_fn=loss_fn, params=params, inputs=images, targets=labels,
         lr=learning_rate, **config["gsam"])
     l, grads = jax.lax.pmean((l, grads), axis_name="batch")
     updates, opt = tx.update(grads, opt, params)
@@ -290,7 +290,7 @@ def main(argv):
           params_repl, opt_repl, rngs_loop,
           train_batch["image"],
           train_batch["labels"],
-          step)
+          flax.jax_utils.replicate(step))
 
     # On the first host, let's always profile a handful of early steps.
     if jax.process_index() == 0:
