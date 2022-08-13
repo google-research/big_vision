@@ -35,7 +35,7 @@ def get_config(arg=None):
   arg = bvcc.parse_arg(arg, variant='B/32', runlocal=False)
   config = mlc.ConfigDict()
 
-  config.dataset = 'cifar100'
+  config.dataset = 'imagenet2012'
   config.train_split = 'train[:99%]'
   config.cache_raw = not arg.runlocal  # Needs up to 120GB of RAM!
   config.shuffle_buffer_size = 250_000  # Per host, so small-ish is ok.
