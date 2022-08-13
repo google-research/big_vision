@@ -75,7 +75,7 @@ def get_config(arg=None):
   # Optimizer section
   config.grad_clip_norm = 1.0
   config.optax_name = 'scale_by_adam'
-  config.optax = dict(mu_dtype='bfloat32')
+  config.optax = dict(mu_dtype='float32')
   # The modified AdaFactor we introduced in https://arxiv.org/abs/2106.04560
   # almost always behaves exactly like adam, but at a fraction of the memory
   # cost (specifically, adam_bf16 = +1.5M, adafactor = +0.5M), hence it is a
