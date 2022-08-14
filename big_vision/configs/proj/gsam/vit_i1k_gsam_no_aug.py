@@ -46,17 +46,11 @@ def get_config(arg=None):
       '|onehot(1000, key="{lbl}", key_result="labels")'
       '|keep("image", "labels")'
   )
-  pp = 'decode|resize_small(256)|central_crop(224)' + pp_common
-
-  LS = 1e-4
   config.pp_train = (
-      'decode_jpeg_and_inception_crop(224)'
-      '|flip_lr'
-      '|value_range(-1, 1)'
-      '|onehot({config.num_classes}, key="label",\
-        key_result="labels", on={1.0-LS}, off={LS})'
-      '|keep("image", "labels")'
+      'decode_jpeg_and_inception_crop(224)|flip_lr|' +
+      pp_common.format(lbl='label')
   )
+  pp = 'decode|resize_small(256)|central_crop(224)' + pp_common
 
   # Aggressive pre-fetching because our models here are small, so we not only
   # can afford it, but we also need it for the smallest models to not be
@@ -121,6 +115,11 @@ def get_config(arg=None):
   config.evals.minival = {**eval_common, 'split': 'train[99%:]'}
   config.evals.val = {**eval_common, 'split': 'validation'}
   config.evals.v2 = {**eval_common, 'dataset': 'imagenet_v2', 'split': 'test'}
+
+  config.evals.real = {**eval_common}
+  config.evals.real.dataset = 'imagenet2012_real'
+  config.evals.real.split = 'validation'
+  config.evals.real.pp_fn = pp.format(lbl='real_label')
 
   config.fewshot = get_fewshot_lsr(runlocal=arg.runlocal)
   config.fewshot.log_steps = 10_000
