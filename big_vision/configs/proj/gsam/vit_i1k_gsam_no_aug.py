@@ -48,12 +48,12 @@ def get_config(arg=None):
   )
   pp = 'decode|resize_small(256)|central_crop(224)' + pp_common
 
-  label_smooth = 1e-4
+  LS = 1e-4
   config.pp_train = (
-      'decode_jpeg_and_inception_crop(224)'
+      '|decode|resize_small(256)|central_crop(224)'
       '|flip_lr'
       '|value_range(-1, 1)'
-      '|onehot({config.num_classes}, key="label", key_result="labels", on={1.0-label_smooth}, off={label_smooth})'
+      '|onehot({config.num_classes}, key="label", key_result="labels", on={1.0-LS}, off={LS})'
       '|keep("image", "labels")'
   )
 
