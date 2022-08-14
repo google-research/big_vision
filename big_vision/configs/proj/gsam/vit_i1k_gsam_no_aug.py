@@ -50,10 +50,11 @@ def get_config(arg=None):
 
   LS = 1e-4
   config.pp_train = (
-      '|decode|resize_small(256)|central_crop(224)'
+      'decode_jpeg_and_inception_crop(224)'
       '|flip_lr'
       '|value_range(-1, 1)'
-      '|onehot({config.num_classes}, key="label", key_result="labels", on={1.0-LS}, off={LS})'
+      '|onehot({config.num_classes}, key="label",\
+        key_result="labels", on={1.0-LS}, off={LS})'
       '|keep("image", "labels")'
   )
 
