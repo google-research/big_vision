@@ -1,3 +1,5 @@
+'''This file provides jax implementation of GSAM.'''
+
 import jax
 import jax.numpy as jnp
 
@@ -7,7 +9,7 @@ def dual_vector(y):
     y: A pytree of numpy ndarray, vector y in the equation above.
   """
   gradient_norm = jnp.sqrt(sum(
-        [jnp.sum(jnp.square(e)) for e in jax.tree_util.tree_leaves(y)]))
+        jnp.sum(jnp.square(e)) for e in jax.tree_util.tree_leaves(y)))
   normalized_gradient = jax.tree_map(lambda x: x / gradient_norm, y)
   return normalized_gradient, gradient_norm
 
@@ -15,8 +17,8 @@ def gsam_gradient(loss_fn, params, inputs, targets,
                   rho_max, rho_min, alpha, lr, lr_max, lr_min, eps=1e-12,
                   adaptive_perturbation=False, minimize_fp=True):
   """
-  Get the GSAM gradient (https://openreview.net/pdf?id=edONMAnhLu-) of the loss function.
-  Args: 
+  Get the GSAM gradient (https://openreview.net/pdf?id=edONMAnhLu-).
+  Args:
     loss_fn: the loss function.
     params: the model weights.
     inputs: the inputs to the loss function.
@@ -28,15 +30,19 @@ def gsam_gradient(loss_fn, params, inputs, targets,
     lr_max: the maximum learning rate.
     lr_min: the minimum learning rate.
     eps: the epsilon value for numerical stability.
-    adaptive_perturbation: if False, same perturbation as SAM, treat all parameters as a single vector, 
+    adaptive_perturbation: if False, same perturbation as SAM,
+        treat all parameters as a single vector,
         perturbation norm is calculated as the norm of the whole vector;
-        if True, for each parameter tensor p, perturbation is element-wise multiplied by abs(p).
-    minimize_fp: if True, min(f_p, h), original GSAM; if False, min(f, h), where f is the clean loss, 
+        if True, for each parameter tensor p,
+        perturbation is element-wise multiplied by abs(p).
+    minimize_fp: if True, min(f_p, h), original GSAM;
+        if False, min(f, h), where f is the clean loss.
         f_p is the perturbed loss, h is the surrogate gap.
   Returns:
     l_clean: the loss function value.
-    g_gsam: the GSAM gradient. g_gsam is not averaged across workers, need to call "jax.lax.pmean" to average.
-      
+    g_gsam: the GSAM gradient. g_gsam is not averaged across workers,
+        need to call "jax.lax.pmean" to average.
+
   Note:
     Setting `rho_max=rho_min` and `alpha=0` reduces GSAM to SAM.
   """
@@ -50,14 +56,14 @@ def gsam_gradient(loss_fn, params, inputs, targets,
 
   # Per-worker perturbation.
   if adaptive_perturbation:
-    param_sam = jax.tree_map(lambda a, b: a + jnp.abs(a) * sam_rho * b / (g_clean_length + eps),
-        params, g_clean)
+    param_sam = jax.tree_map(lambda a, b: a + \
+        jnp.abs(a) * sam_rho * b / (g_clean_length + eps), params, g_clean)
   else:
-    param_sam = jax.tree_map(lambda a, b: a + sam_rho * b / (g_clean_length + eps),
-        params, g_clean)
+    param_sam = jax.tree_map(lambda a, b: a + \
+        sam_rho * b / (g_clean_length + eps), params, g_clean)
 
   # Get gradients at perturbed weights.
-  l_robust, g_robust = jax.value_and_grad(loss_fn)(param_sam, inputs, targets)
+  _, g_robust = jax.value_and_grad(loss_fn)(param_sam, inputs, targets)
 
   # Decompose gradients.
   g_clean_flatten, _ = jax.tree_util.tree_flatten(g_clean)
@@ -65,29 +71,31 @@ def gsam_gradient(loss_fn, params, inputs, targets,
 
   if minimize_fp:
     # Decompose g_clean onto parallel and vertical to g_robust.
-    g_robust_normalized, g_robust_length = dual_vector(g_robust)
-    g_robust_normalized_flatten, _ = jax.tree_util.tree_flatten(g_robust_normalized)
+    g_robust_normalized, _ = dual_vector(g_robust)
+    g_robust_normalized_flatten, _ = jax.tree_util.tree_flatten(
+        g_robust_normalized)
 
-    g_clean_projection_norm = sum([jnp.vdot(p, q) for (p,q) in
-        zip(g_robust_normalized_flatten, g_clean_flatten)])
+    g_clean_projection_norm = sum(jnp.vdot(p, q) for (p,q) in
+        zip(g_robust_normalized_flatten, g_clean_flatten))
     g_clean_residual = jax.tree_map(lambda a, b:
         a - g_clean_projection_norm * b, g_clean, g_robust_normalized)
 
     # Get GSAM gradient.
-    g_gsam = jax.tree_map(lambda a, b: a - b * alpha, 
+    g_gsam = jax.tree_map(lambda a, b: a - b * alpha,
         g_robust, g_clean_residual)
   else:
     # Decompose g_robust onto parallel and vertical to g_clean.
     g_clean_normalized, g_clean_length = dual_vector(g_clean)
-    g_clean_normalized_flatten, _ = jax.tree_util.tree_flatten(g_clean_normalized)
+    g_clean_normalized_flatten, _ = jax.tree_util.tree_flatten(
+        g_clean_normalized)
 
-    g_robust_projection_norm = sum([jnp.vdot(p, q) for (p,q) in
-        zip(g_clean_normalized_flatten, g_robust_flatten)])
+    g_robust_projection_norm = sum(jnp.vdot(p, q) for (p,q) in
+        zip(g_clean_normalized_flatten, g_robust_flatten))
     g_robust_residual = jax.tree_map(lambda a, b:
         a - g_robust_projection_norm * b, g_robust, g_clean_normalized)
-    
+
     # Get GSAM gradient.
-    g_gsam = jax.tree_map(lambda a, b: a + b * alpha, 
+    g_gsam = jax.tree_map(lambda a, b: a + b * alpha,
         g_clean, g_robust_residual)
 
   # Always return the clean loss (rather than the perturbed loss).

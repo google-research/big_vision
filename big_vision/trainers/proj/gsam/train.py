@@ -179,7 +179,7 @@ def main(argv):
       total_steps=total_steps,
       steps_per_epoch=steps_per_epoch))
 
-  assert len(sched_fns) == 1, "Current GSAM only supports one global learning-rate."
+  assert len(sched_fns) == 1, "Current GSAM supports one global learning-rate."
 
   # We jit this, such that the arrays are created on the CPU, not device[0].
   opt_cpu = jax.jit(tx.init, backend="cpu")(params_cpu)
@@ -206,18 +206,18 @@ def main(argv):
           logits=logits, labels=labels)
 
     learning_rate = sched_fns[0](step) * config["lr"]
-    l, grads = gsam_gradient(loss_fn=loss_fn, params=params, inputs=images, targets=labels,
-        lr=learning_rate, **config["gsam"])
+    l, grads = gsam_gradient(loss_fn=loss_fn, params=params, inputs=images,
+        targets=labels, lr=learning_rate, **config["gsam"])
     l, grads = jax.lax.pmean((l, grads), axis_name="batch")
     updates, opt = tx.update(grads, opt, params)
     params = optax.apply_updates(params, updates)
 
-    gs = jax.tree_util.tree_leaves(bv_optax.replace_frozen(config.schedule, grads, 0.))
-    measurements["l2_grads"] = jnp.sqrt(sum([jnp.vdot(g, g) for g in gs]))
+    gs = jax.tree_leaves(bv_optax.replace_frozen(config.schedule, grads, 0.))
+    measurements["l2_grads"] = jnp.sqrt(sum(jnp.vdot(g, g) for g in gs))
     ps = jax.tree_util.tree_leaves(params)
-    measurements["l2_params"] = jnp.sqrt(sum([jnp.vdot(p, p) for p in ps]))
+    measurements["l2_params"] = jnp.sqrt(sum(jnp.vdot(p, p) for p in ps))
     us = jax.tree_util.tree_leaves(updates)
-    measurements["l2_updates"] = jnp.sqrt(sum([jnp.vdot(u, u) for u in us]))
+    measurements["l2_updates"] = jnp.sqrt(sum(jnp.vdot(u, u) for u in us))
 
     return params, opt, rng, l, measurements
 

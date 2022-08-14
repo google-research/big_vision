@@ -13,10 +13,7 @@
 # limitations under the License.
 
 # pylint: disable=line-too-long
-r"""Pre-training ViT on ILSVRC-2012 as in https://arxiv.org/abs/2203.08065
-
-This configuration makes use of the "arg" to get_config to select which model
-to run, so a few examples are given below:
+r"""Pre-training ViT on ILSVRC-2012 with GSAM in https://arxiv.org/abs/2203.08065
 
 Run training of a B/32 model:
 
@@ -50,9 +47,15 @@ def get_config(arg=None):
       '|keep("image", "labels")'
   )
   pp = 'decode|resize_small(256)|central_crop(224)' + pp_common
-  
-  LS = 1e-4
-  config.pp_train = f'decode|resize_small(256)|central_crop(224)|flip_lr|value_range(-1, 1)|onehot({config.num_classes}, key="label", key_result="labels", on={1.0-LS}, off={LS})|keep("image", "labels")'   # pylint: disable=line-too-long
+
+  label_smooth = 1e-4
+  config.pp_train = (
+      'decode_jpeg_and_inception_crop(224)'
+      '|flip_lr'
+      '|value_range(-1, 1)'
+      '|onehot({config.num_classes}, key="label", key_result="labels", on={1.0-label_smooth}, off={label_smooth})'
+      '|keep("image", "labels")'
+  )
 
   # Aggressive pre-fetching because our models here are small, so we not only
   # can afford it, but we also need it for the smallest models to not be
@@ -87,9 +90,9 @@ def get_config(arg=None):
   config.lr = 0.003
   config.wd = 0.001 # default is 0.0001; paper used 0.3, effective wd=0.3*lr
   config.schedule = dict(
-      warmup_steps=10_000, 
+      warmup_steps=10_000,
       decay_type='linear',
-      linear_end=0.00003,
+      linear_end=0.001,
   )
 
   # GSAM settings.
@@ -101,13 +104,13 @@ def get_config(arg=None):
       adaptive_perturbation=False,
       minimize_fp=True,
       lr_max=config.get_ref('lr'),
-      lr_min=config.schedule.get_ref('linear_end'),
+      lr_min=config.schedule.get_ref('linear_end') * config.get_ref('lr'),
   )
 
   # Eval section
   eval_common = dict(
       type='classification',
-      dataset='cifar100',
+      dataset='imagenet2012',
       pp_fn=pp.format(lbl='label'),
       loss_name=config.loss,
       log_steps=2500,  # Very fast O(seconds) so it's fine to run it often.
