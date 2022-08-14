@@ -92,7 +92,7 @@ def get_config(arg=None):
   config.schedule = dict(
       warmup_steps=10_000,
       decay_type='linear',
-      linear_end=0.001,
+      linear_end=0.01,
   )
 
   # GSAM settings.
