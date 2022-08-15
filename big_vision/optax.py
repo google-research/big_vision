@@ -68,7 +68,7 @@ def make(config, params, *, sched_kw):
       # Removes weight decay updates. Note that weight decay already has an
       # independent mask (which cannot be combined easily with a second mask),
       # so instead we multiply updates for frozen params with zero.
-      optax.masked(optax.scale(0.0), frozen_mask)
+      optax.masked(optax.set_to_zero(), frozen_mask)
   ]
 
   # Gradient clipping.
