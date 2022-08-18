@@ -33,7 +33,8 @@ def from_config(config, predict_fns, write_note=lambda s: s):
     prefix = cfg.pop("prefix", f"{name}/")
 
     # Use same batch_size as eval by default, to reduce fragmentation.
-    cfg["batch_size"] = cfg.get("batch_size") or config.get("batch_size_eval") or config.get("batch_size")  # pylint: disable=line-too-long
+    # TODO: eventually remove all the deprecated names...
+    cfg["batch_size"] = cfg.get("batch_size") or config.get("batch_size_eval") or config.get("input.batch_size") or config.get("batch_size")  # pylint: disable=line-too-long
 
     module = importlib.import_module(f"big_vision.evaluators.{module}")
     evaluator = module.Evaluator(predict_fns[fn_key], **cfg)

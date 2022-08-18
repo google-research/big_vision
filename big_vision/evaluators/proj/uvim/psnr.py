@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Evaluation for image colorization."""
+"""Compute PSNR, currently used for colorization and superresolution."""
 
 import functools
 
@@ -25,17 +25,18 @@ import tensorflow as tf
 
 
 class Evaluator:
-  """Colorization evaluator.
+  """PSNR evaluator.
 
   `predict_fn` accepts arbitrary dictionaries of parameters and data, where
   the data dictionary is produced by the `pp_fn` op. It is expected to output a
-  dict with `color` containing an RGB image with intensities in [-1,1].
+  single-key dict containing an RGB image with intensities in [-1,1].
   """
 
   def __init__(self,
                predict_fn,
                pp_fn,
                batch_size,
+               dataset="imagenet2012",
                split="validation",
                predict_kwargs=None):
 
@@ -44,7 +45,9 @@ class Evaluator:
       def _f(x):
         y = predict_fn(params, x, **(predict_kwargs or {}))
         # Assume image intensities are in [-1,1].
-        return _psnr(y["color"], x["labels"], 2.)
+        # Evaluator expects a dict with a single item.
+        pred, = y.values()
+        return _psnr(pred, x["labels"], 2.)
       return jax.lax.all_gather({
           "mask": batch["mask"],
           "psnr": _f(batch["input"]),
@@ -61,7 +64,7 @@ class Evaluator:
       }
 
     self.data = common.get_jax_process_dataset(
-        "imagenet2012",
+        dataset,
         split,
         global_batch_size=batch_size,
         add_tfds_id=True,
@@ -88,7 +91,7 @@ class Evaluator:
     if jax.process_index():  # Host0 gets all preds and does eval.
       return
 
-    yield "resizedPSNR", np.mean(psnrs)
+    yield "PSNR", np.mean(psnrs)
 
 
 @functools.partial(jax.vmap, in_axes=[0, 0, None])

@@ -15,7 +15,8 @@
 """Evaluator for the classfication task."""
 from functools import partial, lru_cache
 
-from  big_vision import input_pipeline
+from big_vision import input_pipeline
+import big_vision.datasets.core as ds_core
 import big_vision.pp.builder as pp_builder
 import big_vision.utils as u
 
@@ -94,12 +95,14 @@ def get_eval_fn(student_teacher_fwd, what, distances):
 class Evaluator:
   """Distillation distance evaluator."""
 
-  def __init__(self, student_teacher_fwd, dataset, split, pp_fn, distances,
-               what=('logits', 'logits'), cache_final=True, **data_kw):
+  def __init__(self, student_teacher_fwd, data, pp_fn, distances,
+               what=('logits', 'logits'), **data_kw):
+    data = ds_core.get(**data)
     pp_fn = pp_builder.get_preprocess_fn(pp_fn)
     prefetch = data_kw.pop('prefetch', 1)
     self.ds, self.steps = input_pipeline.make_for_inference(
-        dataset, split, preprocess_fn=pp_fn, cache_final=cache_final, **data_kw)
+        data.get_tfdata(ordered=True), pp_fn,
+        num_ex_per_process=data.num_examples_per_process(), **data_kw)
     self.data_iter = input_pipeline.start_input_pipeline(self.ds, prefetch)
     dist_fns = tuple(get_dist_fn(**dist) for dist in distances)
     self.dist_names = [
@@ -121,7 +124,7 @@ class Evaluator:
         all_ds[i].append(np.array(val[0]).flatten()[batch_ms == 1])
     for name, ds in zip(self.dist_names, all_ds):
       ds = np.concatenate(ds)
+      yield f'{name}/all', ds
       yield f'{name}/avg', np.mean(ds)
-      yield f'{name}/std', np.std(ds)
       yield f'{name}/min', np.min(ds)
       yield f'{name}/max', np.max(ds)

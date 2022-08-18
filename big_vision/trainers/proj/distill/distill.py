@@ -34,9 +34,10 @@ import os
 from absl import app
 from absl import flags
 from absl import logging
-from big_vision import input_pipeline
+import big_vision.datasets.core as ds_core
 import big_vision.evaluators.common as eval_common
 import big_vision.evaluators.proj.distill.distance as dd
+import big_vision.input_pipeline as input_pipeline
 import big_vision.optax as bv_optax
 import big_vision.pp.builder as pp_builder
 import big_vision.utils as u
@@ -48,7 +49,7 @@ from ml_collections import config_flags
 import numpy as np
 import optax
 import tensorflow as tf
-import tensorflow.io.gfile as gfile
+from tensorflow.io import gfile
 
 # pylint: disable=logging-fstring-interpolation
 
@@ -82,10 +83,8 @@ def main(argv):
       f"{jax.local_device_count()}/{jax.device_count()} devices and "
       f"writing to workdir {workdir}.\u001b[0m")
 
-  assert not config.get("grad_accum_steps"), "Grad-acc not supported anymore."
-
   save_ckpt_path = None
-  if workdir and config.get("ckpt_steps"):
+  if workdir:  # Always create if requested, even if we may not write into it.
     gfile.makedirs(workdir)
     save_ckpt_path = os.path.join(workdir, "checkpoint.npz")
 
@@ -93,7 +92,7 @@ def main(argv):
   pool = multiprocessing.pool.ThreadPool()
 
   # Here we register preprocessing ops from modules listed on `pp_modules`.
-  for m in config.get("pp_modules", ["ops_general", "ops_image"]):
+  for m in config.get("pp_modules", ["ops_general", "ops_image", "ops_text"]):
     importlib.import_module(f"big_vision.pp.{m}")
 
   # This seed makes the Jax part of things (like model init) deterministic.
@@ -112,14 +111,9 @@ def main(argv):
     if jax.process_index() == 0:
       info("%s", note)
 
-  # Verify settings to make sure no checkpoints are accidentally missed.
-  if config.get("keep_ckpt_steps"):
-    assert config.get("ckpt_steps"), "Specify `ckpt_steps`."
-    assert config.keep_ckpt_steps % config.ckpt_steps == 0, (
-        f"`keep_ckpt_steps` ({config.ckpt_steps}) should be"
-        f"divisible by `ckpt_steps ({config.ckpt_steps}).`")
+  write_note("Initializing...")
 
-  batch_size = config.batch_size
+  batch_size = config.input.batch_size
   if batch_size % jax.device_count() != 0:
     raise ValueError(f"Batch size ({batch_size}) must "
                      f"be divisible by device number ({jax.device_count()})")
@@ -134,31 +128,27 @@ def main(argv):
   chrono = u.Chrono()
 
   write_note("Initializing train dataset...")
+  train_data = ds_core.get(**config.input.data)
   train_ds = input_pipeline.make_for_train(
-      dataset=config.dataset,
-      split=config.train_split,
-      batch_size=config.batch_size,
-      preprocess_fn=pp_builder.get_preprocess_fn(config.pp_train),
-      shuffle_buffer_size=config.get("shuffle_buffer_size"),
-      cache_raw=config.get("cache_raw", False),
-      data_dir=fillin(config.get("dataset_dir")))
+      data=train_data.get_tfdata(ordered=False),
+      batch_size=batch_size,
+      preprocess_fn=pp_builder.get_preprocess_fn(config.input.get("pp")),
+      shuffle_buffer_size=config.input.get("shuffle_buffer_size"),
+      cache_raw=config.input.get("cache_raw", False),
+      filter_fn=config.input.get("filter_fn"),
+  )
 
+  # Start prefetching already.
   n_prefetch = config.get("prefetch_to_device", 1)
   train_iter = input_pipeline.start_input_pipeline(train_ds, n_prefetch)
+  ntrain_img = train_data.total_examples
 
-  ntrain_img = input_pipeline.get_num_examples(
-      config.dataset, config.train_split,
-      data_dir=fillin(config.get("dataset_dir")))
-  steps_per_epoch = ntrain_img / batch_size
+  def get_steps(name, default=ValueError):  # partial doesn't work well here.
+    return u.steps(name, config, ntrain_img, batch_size, default)
+  total_steps = get_steps("total")
 
-  if config.get("total_epochs"):
-    total_steps = int(config.total_epochs * steps_per_epoch)
-    assert not config.get("total_steps"), "Set only one of total_(epochs|steps)"
-  else:
-    total_steps = config.total_steps
-
-  info("Running for %d steps, that means %f epochs and %f steps per epoch",
-       total_steps, total_steps * batch_size / ntrain_img, steps_per_epoch)
+  info("Running for %d steps, that means %f epochs",
+       total_steps, total_steps * batch_size / ntrain_img)
 
   # Create student and teacher models
   def get_model_mod(name):  # Used many times.
@@ -182,14 +172,14 @@ def main(argv):
     @partial(jax.jit, backend="cpu")
     def _init(rng):
       shape = tuple(train_ds.element_spec["image"].shape[1:])
-      bs = config.batch_size // jax.device_count()
+      bs = batch_size // jax.device_count()
       dummy_input = jnp.zeros((bs,) + shape, jnp.float32)
       params = flax.core.unfreeze(model.init(rng, dummy_input))["params"]
 
       # Set bias in the head to a low value, such that loss is small initially.
       if "init_head_bias" in config:
-        params["head"]["bias"] = jnp.full_like(
-            params["head"]["bias"], config["init_head_bias"])
+        params["head"]["bias"] = jnp.full_like(params["head"]["bias"],
+                                               config["init_head_bias"])
       return params
     return _init
 
@@ -197,7 +187,6 @@ def main(argv):
   params_cpu = {name: get_init(models[name])(rngi)
                 for name, rngi in zip(models, rng_inits)}
 
-  # Log all parameters to helping debugging.
   if jax.process_index() == 0:
     for name, params in params_cpu.items():
       parameter_overview.log_parameter_overview(params, msg=f"{name} params")
@@ -210,9 +199,7 @@ def main(argv):
   # or similar for good (we explored but ditched), need to refactor this a bit.
   tx, sched_fns = bv_optax.make(
       config, params_cpu["student"], sched_kw=dict(
-          global_batch_size=batch_size,
-          total_steps=total_steps,
-          steps_per_epoch=steps_per_epoch))
+          total_steps=total_steps, batch_size=batch_size, data_size=ntrain_img))
 
   # We jit this, such that the arrays are created on the CPU, not device[0].
   opt_cpu = jax.jit(tx.init, backend="cpu")(params_cpu["student"])
@@ -288,16 +275,6 @@ def main(argv):
 
     return params, opt, rng, l, measurements
 
-  # TODO: implement a distillation evaluator.
-  # @partial(jax.pmap, axis_name="batch")
-  # def evaluation_distill_fn(params, nparams, data):
-  #   mask = data["mask"]
-  #   _, extra_losses = loss_fn(params, nparams, data, reduce=False)
-  #   losses = extra_losses["distill_loss"]
-  #   loss = jax.lax.psum(losses * mask, axis_name="batch")
-  #   n = jax.lax.psum(mask, axis_name="batch")
-  #   return loss, n
-
   # We always load the teachers first, because they NEED to be initialized
   # and since we don't ever modify them, we don't store them in checkpoints.
   for name in config.teachers:
@@ -339,12 +316,16 @@ def main(argv):
 
   write_note("Kicking off misc stuff...")
   first_step = bv_optax.get_count(opt_cpu)
-  chrono.inform(first_step, total_steps, batch_size, steps_per_epoch)
+  chrono.inform(first_step, total_steps, batch_size, ntrain_img / batch_size)
   prof = None  # Keeps track of start/stop of profiler state.
 
   write_note(f"Replicating...\n{chrono.note}")
   params_repl = flax.jax_utils.replicate(params_cpu)
   opt_repl = flax.jax_utils.replicate(opt_cpu)
+
+  # Initializing evaluators later when they are first needed, so we can see
+  # issues with training faster.
+  evaluators = None
 
   # Define predict functions that the evaluators can use:
   # 1. One per model
@@ -369,32 +350,28 @@ def main(argv):
       return student_ret, teacher_ret
     predict_fns[f"student_{name}_fwd"] = fwd
 
-  evaluators = eval_common.from_config(
-      config, predict_fns,
-      lambda s: write_note(f"Initializing evaluator: {s}...\n{chrono.note}"))
-
   rng, rng_loop = jax.random.split(rng, 2)
   rngs_loop = flax.jax_utils.replicate(rng_loop)
   ckpt_writer = None
 
   write_note(f"First step compilations...\n{chrono.note}")
   error = None  # For exiting with an error after cleanup. Avoids indentation.
+
   # Using a python integer for step here, because opt.state.step is allocated
   # on TPU during replication.
-  for step, train_batch in zip(
-      range(first_step + 1, total_steps + 1), train_iter):
+  for step, batch in zip(range(first_step + 1, total_steps + 1), train_iter):
     mw.step_start(step)
 
     with jax.profiler.StepTraceAnnotation("train_step", step_num=step):
       params_repl, opt_repl, rngs_loop, loss_value, measurements = update_fn(
-          params_repl, opt_repl, rngs_loop, train_batch)
+          params_repl, opt_repl, rngs_loop, batch)
 
     # On the first host, let's always profile a handful of early steps.
     if jax.process_index() == 0:
-      prof = u.startstop_prof(prof, step, first_step, config.log_training_steps)
+      prof = u.startstop_prof(prof, step, first_step, get_steps("log_training"))
 
     # Report training progress
-    if (u.itstime(step, config.log_training_steps, total_steps, host=0)
+    if (u.itstime(step, get_steps("log_training"), total_steps, host=0)
         or chrono.warmup and jax.process_index() == 0):
       for i, sched_fn_cpu in enumerate(sched_fns_cpu):
         mw.measure(f"global_schedule{i if i else ''}", sched_fn_cpu(step - 1))
@@ -404,12 +381,13 @@ def main(argv):
       chrono.tick(step, mw.measure, write_note)
       if not np.isfinite(l):
         error = (f"The loss became nan or inf somewhere within steps "
-                 f"[{step - config.log_training_steps}, {step}]")
+                 f"[{step - get_steps('log_training')}, {step}]")
         break
 
     # Checkpoint saving
     if (save_ckpt_path and
-        u.itstime(step, config.get("ckpt_steps"), total_steps, host=0)):
+        (u.itstime(step, get_steps("ckpt", None), total_steps, host=0) or
+         u.itstime(step, get_steps("keep_ckpt", None), total_steps, host=0))):
       chrono.pause(wait_for=(params_repl["student"], opt_repl))
       u.checkpointing_timeout(ckpt_writer, config.get("ckpt_timeout", 1))
       # We need to transfer the weights over now or else we risk keeping them
@@ -420,7 +398,7 @@ def main(argv):
 
       # Check whether we want to keep a copy of the current checkpoint.
       copy_step = None
-      if u.itstime(step, config.get("keep_ckpt_steps"), total_steps):
+      if u.itstime(step, get_steps("keep_ckpt", None), total_steps):
         copy_step = step
 
       ckpt = {"params": params_cpu["student"],
@@ -430,18 +408,11 @@ def main(argv):
           u.save_checkpoint, (ckpt, save_ckpt_path, copy_step))
       chrono.resume()
 
-    # TODO: Evaluator to compute distillation loss/distance on val.
-    # if u.itstime(step, config.log_eval_steps, total_steps):
-    #   chrono.pause()
-    #   for val_name, (val_iter, val_steps) in val_ds.items():
-    #     loss, nseen = 0, 0
-    #     for _, batch in zip(range(val_steps), val_iter):
-    #       batch_losses, batch_n = evaluation_distill_fn(
-    #           opt_repl.target, nopt_repl, batch)
-    #       loss += np.sum(np.array(batch_losses[0]))
-    #       nseen += np.sum(np.array(batch_n[0]))
-    #     mw.measure(f"{val_name}_distill_loss", loss / nseen)
-
+    if evaluators is None:
+      evaluators = eval_common.from_config(
+          config, predict_fns,
+          lambda s: write_note(f"Initializing evaluator: {s}...\n{chrono.note}")
+      )
     for (name, evaluator, log_steps, prefix) in evaluators:
       if u.itstime(step, log_steps, total_steps):
         chrono.pause(wait_for=params_repl)
@@ -467,7 +438,7 @@ def main(argv):
   mw.close()
 
   # Make sure all hosts stay up until the end of main.
-  u.sync_all_hosts()
+  u.sync()
 
   # Before cleanup, as cleanup should only run for successful jobs.
   if error is not None:

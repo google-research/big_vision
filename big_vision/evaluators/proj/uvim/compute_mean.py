@@ -17,6 +17,7 @@ import functools
 from typing import Mapping
 
 from big_vision import input_pipeline
+from big_vision.datasets import core as ds_core
 from big_vision.pp import builder as pp_builder
 
 import jax
@@ -49,10 +50,12 @@ class Evaluator:
   per-example metrics of shape [batch_size].
   """
 
-  def __init__(self, predict_fn, dataset, split, pp_fn, batch_size,
-               data_dir=None, cache_final=True, cache_raw=False, prefetch=1):
+  def __init__(self, predict_fn, data, pp_fn, batch_size,
+               cache_final=True, cache_raw=False, prefetch=1):
+    data = ds_core.get(**data)
     self.dataset, self.steps = input_pipeline.make_for_inference(
-        dataset=dataset, split=split, data_dir=data_dir, batch_size=batch_size,
+        data.get_tfdata(ordered=True), batch_size=batch_size,
+        num_ex_per_process=data.num_examples_per_process(),
         preprocess_fn=pp_builder.get_preprocess_fn(pp_fn),
         cache_final=cache_final, cache_raw=cache_raw)
     self.data_iter = input_pipeline.start_input_pipeline(self.dataset, prefetch)

@@ -39,7 +39,7 @@ def get_fewshot_lsr(target_resolution=224, resize_resolution=256,
   }
   config.pp_train = f'decode|resize({resize_resolution})|central_crop({target_resolution})|value_range(-1,1)|keep("image", "label")'
   config.pp_eval = f'decode|resize({resize_resolution})|central_crop({target_resolution})|value_range(-1,1)|keep("image", "label")'
-  config.shots = [1, 5, 10, 25]
+  config.shots = (1, 5, 10, 25)
   config.l2_reg = 2.0 ** 10
   config.num_seeds = 3
   config.display_first = [('imagenet', 10)] if not runlocal else [('pets', 10)]

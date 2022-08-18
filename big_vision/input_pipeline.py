@@ -13,62 +13,20 @@
 # limitations under the License.
 
 """ImageNet input pipeline."""
-import functools
 import math
+
 import einops
 import flax.jax_utils as flax_utils
 import jax
-
 import tensorflow as tf
-import tensorflow_datasets as tfds
-
-
-@functools.lru_cache(maxsize=None)
-def get_builder(dataset, data_dir):
-  return tfds.builder(dataset, data_dir=data_dir, try_gcs=True)
-
-
-def get_num_examples(dataset, split, data_dir=None):
-  builder = get_builder(dataset, data_dir)
-  return builder.info.splits[split].num_examples
-
-
-def get_max_examples_per_host(dataset, split, data_dir=None):
-  """Returns the max number of examples accross all hosts."""
-  splits = tfds.even_splits(split, jax.process_count())
-  return max([get_num_examples(dataset, s, data_dir) for s in splits])
-
-
-def get_dataset_tfds(dataset="imagenet2012", split="train",
-                     shuffle_files=True, data_dir=None, skip_decode=("image",)):
-  """Data provider."""
-  builder = get_builder(dataset, data_dir)
-  split = tfds.even_splits(split, jax.process_count())[jax.process_index()]
-  skip_decoders = {
-      f: tfds.decode.SkipDecoding()
-      for f in skip_decode
-      if f in builder.info.features
-  }
-  # Each host is responsible for a fixed subset of data
-  return builder.as_dataset(
-      split=split,
-      shuffle_files=shuffle_files,
-      read_config=tfds.ReadConfig(
-          skip_prefetch=True,  # We prefetch after pipeline.
-          try_autocache=False,  # We control this, esp. for few-shot.
-          add_tfds_id=True,
-      ),
-      decoders=skip_decoders), builder
 
 
 def make_for_train(
-    dataset, split, preprocess_fn, batch_size,
-    shuffle_buffer_size, cache_raw=False, data_dir=None, filter_fn=None,
+    data, preprocess_fn, batch_size,
+    shuffle_buffer_size, cache_raw=False, filter_fn=None,
     num_parallel_calls=100, prefetch=2):
   """Makes an input pipeline for training."""
 
-  data, _ = get_dataset_tfds(dataset=dataset, split=split,
-                             shuffle_files=True, data_dir=data_dir)
   data = _add_tpu_host_options(data)
 
   # Use data filtering at your own risk: the actual split sizes won't be known
@@ -92,23 +50,23 @@ def make_for_train(
 # Andreas Steiner and also implemented by him in the clu library:
 # https://github.com/google/CommonLoopUtils/blob/84b777c42dfd3fb6685537138433bfeb5241a006/clu/deterministic_data.py#L304.
 def make_for_inference(
-    dataset, split, preprocess_fn, batch_size, data_dir=None,
+    data, preprocess_fn, batch_size, num_ex_per_process,
     cache_raw=False, cache_final=False):
   """Makes an input pipeline for inference."""
-  data, _ = get_dataset_tfds(dataset=dataset, split=split,
-                             shuffle_files=False, data_dir=data_dir)
+
   data = _add_tpu_host_options(data)
   data = data.cache() if cache_raw else data
   data = data.map(_add_mask(preprocess_fn), num_parallel_calls=100)
   data = data.concatenate(_get_pad_data(data))
+
+  local_batch_size = batch_size // jax.process_count()
   # Since we do 'infinite' padding it is safe to drop the remainder.
-  data = data.batch(batch_size // jax.process_count(), drop_remainder=True)
+  data = data.batch(local_batch_size, drop_remainder=True)
 
   # We need to make sure that all hosts process all data and exactly the same
   # number of batches. Below we take max per-host num examples and use it on all
   # hosts to derive the number of batches.
-  n = get_max_examples_per_host(dataset, split, data_dir)
-  num_batches = math.ceil(n / (batch_size // jax.process_count()))
+  num_batches = math.ceil(max(num_ex_per_process) / local_batch_size)
   data = data.take(num_batches)
 
   # Note we cache data after a finite number of batches is taken.
@@ -147,5 +105,3 @@ def start_input_pipeline(data, n_prefetch, shard=True):
   if shard and n_prefetch:  # Only works for pmap.
     it = flax_utils.prefetch_to_device(it, n_prefetch)
   return it
-
-

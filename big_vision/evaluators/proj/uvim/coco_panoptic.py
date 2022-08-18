@@ -61,6 +61,8 @@ class Evaluator:
                predict_fn,
                pp_fn,
                batch_size,
+               dataset='coco/2017_panoptic',
+               dataset_dir=None,
                split='validation',
                predict_kwargs=None):
     # Prepare to run predict on all processes and gather predictions on all
@@ -85,7 +87,7 @@ class Evaluator:
       }
 
     self.data = common.get_jax_process_dataset(
-        'coco/2017_panoptic', split,
+        dataset, split, dataset_dir=dataset_dir,
         global_batch_size=batch_size,
         pp_fn=preprocess)
 
@@ -93,7 +95,8 @@ class Evaluator:
     if jax.process_index() == 0:
       self.result_dir = tempfile.TemporaryDirectory()
       (self.gt_folder, self.gt_json, self.categories_json,
-       self.remap, self.size_map) = _prepare_ground_truth(split)
+       self.remap, self.size_map) = _prepare_ground_truth(
+           dataset, split, dataset_dir)
 
   def _compute_png_predictions(self, params):
     """Computes predictions and converts then to png to optimize memory use."""
@@ -170,8 +173,80 @@ class Evaluator:
         yield f'{k}_{m}', res[k][m]
 
 
-def _prepare_ground_truth(split):
-  """Prepare ground truth."""
+def _prepare_ground_truth(dataset, split, data_dir):
+  """Prepare ground truth from tf.data.Dataset."""
+  if dataset == 'coco/2017_panoptic' and data_dir is None:
+    return _prepare_ground_truth_from_zipfiles(split)
+  else:
+    return _prepare_ground_truth_from_dataset(dataset, split, data_dir)
+
+
+@functools.lru_cache(maxsize=None)
+def _prepare_ground_truth_from_dataset(dataset, split, data_dir):
+  """Prepare ground truth from a tf.data.Dataset."""
+  dataset = tfds.builder(dataset, data_dir=data_dir).as_dataset(split=split)
+
+  categories_json = _make_local_copy(PANOPTIC_COCO_CATS_FILE)
+  with gfile.GFile(categories_json, 'rb') as f:
+    categories = json.loads(f.read())
+
+  # Build map from tfds class ids to COCO class ids.
+  remap = {0: 0}
+  with gfile.GFile(categories_json, 'r') as f:
+    remap = {**remap, **{(i + 1): x['id'] for i, x in enumerate(categories)}}
+
+  gt_folder = tempfile.mkdtemp()
+  gfile.makedirs(gt_folder)
+  size_map = {}
+  annotations = []
+  images = []
+  for example in dataset:
+    image_id = int(example['image/id'])
+    panoptic_image = example['panoptic_image']
+    ann_ids = example['panoptic_objects']['id']
+    ann_labels = example['panoptic_objects']['label']
+    ann_iscrowd = example['panoptic_objects']['is_crowd']
+    ann_area = example['panoptic_objects']['area']
+
+    fname = f'{image_id:012d}.png'
+    with gfile.GFile(os.path.join(gt_folder, fname), 'wb') as f:
+      f.write(tf.io.encode_png(panoptic_image).numpy())
+
+    size_map[image_id] = (panoptic_image.shape[0], panoptic_image.shape[1])
+
+    segments_info = []
+    for i in range(len(ann_ids)):
+      segments_info.append({
+          'id': int(ann_ids[i]),
+          'category_id': remap[int(ann_labels[i] + 1)],
+          'iscrowd': int(ann_iscrowd[i]),
+          'area': int(ann_area[i]),
+      })
+
+    annotations.append({
+        'file_name': str(fname),
+        'image_id': int(image_id),
+        'segments_info': segments_info
+    })
+    images.append({
+        'id': image_id,
+        'file_name': f'{image_id:012d}.jpg',
+    })
+
+  # Write annotations.json needed for pq_compute.
+  gt_json = os.path.join(gt_folder, 'annotations.json')
+  with gfile.GFile(gt_json, 'wb') as f:
+    f.write(json.dumps({
+        'images': images,
+        'annotations': annotations,
+        'categories': categories,
+    }))
+
+  return gt_folder, gt_json, categories_json, remap, size_map
+
+
+def _prepare_ground_truth_from_zipfiles(split):
+  """Prepare ground truth from coco zip files."""
   split_prefix = split.split('[')[0]
   if split_prefix not in ('train', 'validation'):
     raise ValueError(f'Split {split} not supported')

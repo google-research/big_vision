@@ -31,20 +31,23 @@ def get_config(runlocal=False):
   """Config for training on ImageNet-1k."""
   config = mlc.ConfigDict()
 
-  config.dataset = 'imagenet2012'
-  config.train_split = 'train[:99%]'
-  config.cache_raw = not runlocal  # Needs up to 120GB of RAM!
-  config.shuffle_buffer_size = 250_000 if not runlocal else 10_000  # Per host.
+  config.seed = 0
+  config.total_epochs = 90
   config.num_classes = 1000
   config.loss = 'softmax_xent'
 
-  config.seed = 0
-  config.batch_size = 4096 if not runlocal else 32
-  config.total_epochs = 90
+  config.input = dict()
+  config.input.data = dict(
+      name='imagenet2012',
+      split='train[:99%]',
+  )
+  config.input.batch_size = 4096 if not runlocal else 32
+  config.input.cache_raw = not runlocal  # Needs up to 120GB of RAM!
+  config.input.shuffle_buffer_size = 250_000 if not runlocal else 10_000  # Per host.
 
   pp_common = '|onehot(1000, key="{lbl}", key_result="labels")'
   pp_common += '|value_range(-1, 1)|keep("image", "labels")'
-  config.pp_train = 'decode_jpeg_and_inception_crop(224)|flip_lr' + pp_common.format(lbl='label')
+  config.input.pp = 'decode_jpeg_and_inception_crop(224)|flip_lr' + pp_common.format(lbl='label')
   pp_eval = 'decode|resize_small(256)|central_crop(224)' + pp_common
 
   config.log_training_steps = 50
@@ -62,30 +65,29 @@ def get_config(runlocal=False):
   config.grad_clip_norm = 1.0
 
   # linear scaling rule. Don't forget to sweep if sweeping batch_size.
-  config.wd = (1e-4 / 256) * config.batch_size
-  config.lr = (0.1 / 256) * config.batch_size
+  config.wd = (1e-4 / 256) * config.input.batch_size
+  config.lr = (0.1 / 256) * config.input.batch_size
   config.schedule = dict(decay_type='cosine', warmup_steps=1000)
 
   # Eval section
-  eval_common = dict(
-      type='classification',
-      dataset='imagenet2012',
-      pp_fn=pp_eval.format(lbl='label'),
-      loss_name=config.loss,
-      log_steps=1000,  # Very fast O(seconds) so it's fine to run it often.
-  )
+  def get_eval(split, dataset='imagenet2012'):
+    return dict(
+        type='classification',
+        data=dict(name=dataset, split=split),
+        pp_fn=pp_eval.format(lbl='label'),
+        loss_name=config.loss,
+        log_steps=1000,  # Very fast O(seconds) so it's fine to run it often.
+        cache_final=not runlocal,
+    )
   config.evals = {}
-  config.evals.train = {**eval_common, 'split': 'train[:2%]'}
-  config.evals.minival = {**eval_common, 'split': 'train[99%:]'}
-  config.evals.val = {**eval_common, 'split': 'validation'}
-  config.evals.v2 = {**eval_common, 'dataset': 'imagenet_v2', 'split': 'test'}
-
-  config.evals.real = dict(**eval_common)
-  config.evals.real.dataset = 'imagenet2012_real'
-  config.evals.real.split = 'validation'
+  config.evals.train = get_eval('train[:2%]')
+  config.evals.minival = get_eval('train[99%:]')
+  config.evals.val = get_eval('validation')
+  config.evals.v2 = get_eval('test', dataset='imagenet_v2')
+  config.evals.real = get_eval('validation', dataset='imagenet2012_real')
   config.evals.real.pp_fn = pp_eval.format(lbl='real_label')
 
-  # config.fewshot = get_fewshot_lsr()
-  # config.fewshot.log_steps = 1000
+  # config.evals.fewshot = get_fewshot_lsr(runlocal=runlocal)
+  # config.evals.fewshot.log_steps = 1000
 
   return config

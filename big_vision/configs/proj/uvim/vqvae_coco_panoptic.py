@@ -36,14 +36,15 @@ def get_config(arg='res=512,patch_size=16'):
 
   config.task = 'proj.uvim.panoptic_task'
 
-  config.dataset = 'coco/2017_panoptic'
-  config.train_split = 'train[4096:]'
+  config.input = {}
+  config.input.data = dict(name='coco/2017_panoptic', split='train[4096:]')
 
-  config.trial = 0
-  config.batch_size = 1024
+  config.input.batch_size = 1024
+  config.input.shuffle_buffer_size = 25_000
+
   config.total_epochs = 1000
 
-  config.pp_train = (
+  config.input.pp = (
       f'decode|coco_panoptic|concat(["semantics","instances"], "labels")|'
       f'randu("fliplr")|det_fliplr(key="image")|det_fliplr(key="labels")|'
       f'inception_box|crop_box(key="image")|crop_box(key="labels")|'
@@ -56,11 +57,9 @@ def get_config(arg='res=512,patch_size=16'):
       f'value_range(-1, 1)|make_canonical|keep("image","labels")'
   )
 
-  config.shuffle_buffer_size = 25_000
-
   config.log_training_steps = 50
   config.ckpt_steps = 1000
-  config.keep_ckpt_steps = 20000
+  config.keep_ckpt_steps = 20_000
 
   # Model section
   config.model_name = 'proj.uvim.vit'
@@ -104,8 +103,8 @@ def get_config(arg='res=512,patch_size=16'):
   config.evals.val = mlc.ConfigDict()
   config.evals.val.type = 'proj.uvim.compute_mean'
   config.evals.val.pred = 'validation'
-  config.evals.val.dataset = config.dataset
-  config.evals.val.split = 'train[:4096]'
+  config.evals.val.data = {**config.input.data}
+  config.evals.val.data.split = 'train[:4096]'
   config.evals.val.pp_fn = pp_eval
   config.evals.val.log_steps = 250
 
@@ -127,18 +126,18 @@ def get_config(arg='res=512,patch_size=16'):
   # config.evals.save_pred.split = 'validation[:1024]'
   # config.evals.save_pred.outfile = 'inference.npz'
 
-  config.trial = 0
+  config.seed = 0
 
   if arg.singlehost:
-    config.batch_size = 128
+    config.input.batch_size = 128
     config.num_epochs = 100
   elif arg.runlocal:
-    config.batch_size = 16
-    config.shuffle_buffer_size = 10
+    config.input.batch_size = 16
+    config.input.shuffle_buffer_size = 10
     config.log_training_steps = 5
     config.model.enc_depth = 1
     config.model.dec_depth = 1
-    config.evals.val.split = 'validation[:16]'
+    config.evals.val.data.split = 'validation[:16]'
     config.evals.val.log_steps = 20
 
   return config

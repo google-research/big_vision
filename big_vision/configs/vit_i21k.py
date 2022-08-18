@@ -50,6 +50,12 @@ def get_config(arg=None):
   arg = bvcc.parse_arg(arg, variant='B/16', runlocal=False, aug=None)
   config = mlc.ConfigDict()
 
+  config.seed = 0
+  config.total_epochs = 300
+  config.num_classes = 21843
+  config.init_head_bias = -10.0
+  config.loss = 'sigmoid_xent'
+
   # If this gives a KeyError, lookup Fig4 of the paper and add an entry.
   # Note, this here is a good average between 30ep and 300ep, sometimes you coud
   # find a slightly better setting for either of them.
@@ -62,27 +68,24 @@ def get_config(arg=None):
       'L/16': 'medium2',
   }[arg.variant]
 
-  config.dataset = 'imagenet21k'
-  config.train_split = 'full[51200:]'
-  config.num_classes = 21843
-  config.init_head_bias = -10.0
-  config.loss = 'sigmoid_xent'
-
-  config.batch_size = 4096
-  config.total_epochs = 300
+  config.input = dict()
+  config.input.data = dict(
+      name='imagenet21k',
+      split='full[51200:]',
+  )
+  config.input.batch_size = 4096
+  config.input.shuffle_buffer_size = 250_000  # Per host, so small-ish is ok.
 
   pp_common = '|value_range(-1, 1)|onehot({onehot_args})|keep("image", "labels")'
   pp_common_i21k = pp_common.format(onehot_args=f'{config.num_classes}')
   pp_common_i1k = pp_common.format(onehot_args='1000, key="label", key_result="labels"')
-  config.pp_train = f'decode_jpeg_and_inception_crop(224)|flip_lr|{RANDAUG_DEF[aug_setting]}' + pp_common_i21k
-  pp_eval = 'decode|resize_small(256)|central_crop(224)' + pp_common_i21k
-  pp_eval_i1k = 'decode|resize_small(256)|central_crop(224)' + pp_common_i1k
-  config.shuffle_buffer_size = 250_000  # Per host, so small-ish is ok.
+  config.input.pp = f'decode_jpeg_and_inception_crop(224)|flip_lr|{RANDAUG_DEF[aug_setting]}' + pp_common_i21k
+  pp_eval = 'decode|resize_small(256)|central_crop(224)'
 
   # Aggressive pre-fetching because our models here are small, so we not only
   # can afford it, but we also need it for the smallest models to not be
   # bottle-necked by the input pipeline. Play around with it for -L models tho.
-  config.prefetch_to_host = 8
+  config.input.prefetch = 8
   config.prefetch_to_device = 4
 
   config.log_training_steps = 50
@@ -103,18 +106,19 @@ def get_config(arg=None):
 
   config.mixup = MIXUP_DEF[aug_setting]
 
-  # Eval section
-  eval_common = dict(
-      type='classification',
-      dataset=config.dataset,
-      pp_fn=pp_eval,
-      loss_name=config.loss,
-      log_steps=1000,  # Very fast O(seconds) so it's fine to run it often.
-  )
+  # Evaluations on i21k itself.
+  def eval_i21k(split):
+    return dict(
+        type='classification',
+        data={**config.input.data, 'split': split},
+        pp_fn=pp_eval + pp_common_i21k,
+        loss_name=config.loss,
+        log_steps=1000,  # Very fast O(seconds) so it's fine to run it often.
+    )
   config.evals = {}
-  config.evals.test = {**eval_common, 'split': 'full[:25_600]'}
-  config.evals.val = {**eval_common, 'split': 'full[25_600:51_200]'}
-  config.evals.train = {**eval_common, 'split': 'full[51_200:76_800]'}
+  config.evals.test = eval_i21k('full[:25_600]')
+  config.evals.val = eval_i21k('full[25_600:51_200]')
+  config.evals.train = eval_i21k('full[51_200:76_800]')
 
   # Few-shot evaluators
   config.evals.fewshot = get_fewshot_lsr(runlocal=arg.runlocal)
@@ -122,10 +126,14 @@ def get_config(arg=None):
 
   # Make a few things much smaller for quick local debugging testruns.
   if arg.runlocal:
-    config.shuffle_buffer_size = 10
-    config.batch_size = 8
-    config.evals.test.split = 'full[:16]'
-    config.evals.train.split = 'full[:16]'
-    config.evals.val.split = 'full[:16]'
+    config.input.shuffle_buffer_size = 10
+    config.input.batch_size = 8
+    config.evals.test.data.split = 'full[:16]'
+    config.evals.train.data.split = 'full[:16]'
+    config.evals.val.data.split = 'full[:16]'
+    config.evals.i1k_val.data.split = 'validation[:16]'
+    config.evals.i1k_v2.data.split = 'test[:16]'
+    config.evals.i1k_a.data.split = 'test[:16]'
+    config.evals.i1k_r.data.split = 'test[:16]'
 
   return config

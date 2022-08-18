@@ -84,7 +84,8 @@ def main(argv):
     dummy_inputs = [jnp.zeros(s, t) for s, t in zip(input_shapes, input_types)]
     return flax.core.unfreeze(model.init(rng, *dummy_inputs))["params"]
 
-  params_cpu = init(jax.random.PRNGKey(42))
+  with u.log_timing(mw, "z/secs/init"):
+    params_cpu = init(jax.random.PRNGKey(42))
   if jax.process_index() == 0:
     parameter_overview.log_parameter_overview(params_cpu, msg="init params")
 
@@ -112,15 +113,17 @@ def main(argv):
   for (name, evaluator, _, prefix) in evaluators:
     write_note(f"{name} evaluation...")
     with u.profile(name):
-      for key, value in evaluator.run(params_repl):
-        mw.measure(f"{prefix}{key}", value)
+      with u.log_timing(mw, f"z/secs/eval/{name}"):
+        for key, value in evaluator.run(params_repl):
+          mw.measure(f"{prefix}{key}", value)
+        u.sync()  # sync barrier to get correct measurements
   mw.step_end()
 
   write_note("Done!")
   mw.close()
 
   # Make sure all hosts stay up until the end of main.
-  u.sync_all_hosts()
+  u.sync()
 
   if workdir and flags.FLAGS.cleanup and jax.process_index() == 0:
     gfile.rmtree(workdir)

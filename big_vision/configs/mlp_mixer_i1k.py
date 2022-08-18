@@ -31,14 +31,22 @@ def get_config(mode=None):
   """Config for training Mixer on i1k."""
   config = mlc.ConfigDict()
 
-  config.dataset = 'imagenet2012'
-  config.train_split = 'train[:99%]'
-  config.cache_raw = True  # Needs up to 120GB of RAM!
+  config.seed = 0
+  config.total_epochs = 300
   config.num_classes = 1000
-  config.init_head_bias = -6.9
   config.loss = 'sigmoid_xent'
+  config.init_head_bias = -6.9
 
-  config.pp_train = (
+  config.input = dict()
+  config.input.data = dict(
+      name='imagenet2012',
+      split='train[:99%]',
+  )
+  config.input.batch_size = 4096
+  config.input.cache_raw = True  # Needs up to 120GB of RAM!
+  config.input.shuffle_buffer_size = 250_000
+
+  config.input.pp = (
       'decode_jpeg_and_inception_crop(224)'
       '|flip_lr'
       '|randaug(2,15)'
@@ -46,7 +54,7 @@ def get_config(mode=None):
       '|onehot(1000, key="label", key_result="labels")'
       '|keep("image", "labels")'
   )
-  ppv = (
+  pp_eval = (
       'decode'
       '|resize_small(256)|central_crop(224)'
       '|value_range(-1, 1)'
@@ -54,14 +62,8 @@ def get_config(mode=None):
       '|keep("image", "labels")'
   )
 
-  config.batch_size = 4096
-  config.total_epochs = 300
-
-  config.shuffle_buffer_size = 250_000  # Per host, so small-ish is ok.
-
   config.log_training_steps = 50
   config.ckpt_steps = 1000
-  config.ckpt_timeout = 1
 
   config.prefetch_to_device = 2
 
@@ -86,30 +88,29 @@ def get_config(mode=None):
   )
 
   # Eval section
-  eval_common = dict(
-      type='classification',
-      dataset='imagenet2012',
-      pp_fn=ppv.format(lbl='label'),
-      loss_name=config.loss,
-      log_steps=2500,  # Very fast O(seconds) so it's fine to run it often.
-  )
+  def get_eval(split, dataset='imagenet2012'):
+    return dict(
+        type='classification',
+        data=dict(name=dataset, split=split),
+        pp_fn=pp_eval.format(lbl='label'),
+        loss_name=config.loss,
+        log_steps=2500,  # Very fast O(seconds) so it's fine to run it often.
+        cache_final=mode != 'gpu8',
+    )
   config.evals = {}
-  config.evals.train = {**eval_common, 'split': 'train[:2%]'}
-  config.evals.minival = {**eval_common, 'split': 'train[99%:]'}
-  config.evals.val = {**eval_common, 'split': 'validation'}
-  config.evals.v2 = {**eval_common, 'dataset': 'imagenet_v2', 'split': 'test'}
-
-  config.evals.real = dict(**eval_common)
-  config.evals.real.dataset = 'imagenet2012_real'
-  config.evals.real.split = 'validation'
-  config.evals.real.pp_fn = ppv.format(lbl='real_label')
+  config.evals.train = get_eval('train[:2%]')
+  config.evals.minival = get_eval('train[99%:]')
+  config.evals.val = get_eval('validation')
+  config.evals.v2 = get_eval('test', dataset='imagenet_v2')
+  config.evals.real = get_eval('validation', dataset='imagenet2012_real')
+  config.evals.real.pp_fn = pp_eval.format(lbl='real_label')
 
   config.fewshot = get_fewshot_lsr()
 
   if mode == 'gpu8':
     config.total_epochs = 60
-    config.batch_size = 512
-    config.cache_raw = False
+    config.input.batch_size = 512
+    config.input.cache_raw = False
   if mode == 'regression_test':
     config.total_epochs = 60
 

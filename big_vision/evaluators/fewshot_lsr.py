@@ -13,16 +13,17 @@
 # limitations under the License.
 
 """Utils for few-shot evaluation."""
+# pylint: disable=consider-using-from-import
 
 import functools
 
+import big_vision.datasets.core as ds_core
 import big_vision.input_pipeline as input_pipeline
 import big_vision.pp.builder as pp_builder
 import big_vision.utils as u
 import jax
 import jax.numpy as jnp
 import numpy as np
-import tensorflow_datasets as tfds
 
 BIAS_CONSTANT = 100.0
 
@@ -145,17 +146,20 @@ class Evaluator:
     try:
       return self._datasets[key]
     except KeyError:
+      # NOTE: only supporting TFDS data for now for bwd compat/lazyness.
+      train_data = ds_core.get(name=dataset, split=train_split)
       train_ds, batches_tr = input_pipeline.make_for_inference(
-          dataset=dataset,
-          split=train_split,
+          train_data.get_tfdata(ordered=True),
+          num_ex_per_process=train_data.num_examples_per_process(),
           batch_size=self.batch_size,
           preprocess_fn=pp_builder.get_preprocess_fn(self.pp_tr))
+      test_data = ds_core.get(name=dataset, split=test_split)
       test_ds, batches_te = input_pipeline.make_for_inference(
-          dataset=dataset,
-          split=test_split,
+          test_data.get_tfdata(ordered=True),
+          num_ex_per_process=test_data.num_examples_per_process(),
           batch_size=self.batch_size,
           preprocess_fn=pp_builder.get_preprocess_fn(self.pp_te))
-      num_classes = tfds.builder(dataset).info.features["label"].num_classes
+      num_classes = train_data.builder.info.features["label"].num_classes
       return self._datasets.setdefault(
           key, (train_ds, batches_tr, test_ds, batches_te, num_classes))
 

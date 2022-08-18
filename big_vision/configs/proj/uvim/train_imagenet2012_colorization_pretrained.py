@@ -13,7 +13,7 @@
 # limitations under the License.
 
 # pylint: disable=line-too-long
-r"""A config for training a UViM stage II model for the panoptic task.
+r"""A config for training a UViM stage II model for the colorization task.
 """
 
 import big_vision.configs.common as bvcc
@@ -39,7 +39,8 @@ def get_config(arg=''):
   arg = bvcc.parse_arg(arg, runlocal=False, singlehost=False)
   config = ConfigDict()
 
-  config.pp_train = (
+  config.input = {}
+  config.input.pp = (
       f'decode_jpeg_and_inception_crop({RES})'
       f'|flip_lr'
       f'|copy(inkey="image", outkey="labels")'
@@ -63,19 +64,17 @@ def get_config(arg=''):
       f'|strong_hash(inkey="tfds_id", outkey="image/id")'
       f'|keep("image","image_ctx","labels","image/id")')
 
-  config.dataset = 'imagenet2012'
-  config.train_split = 'train[4096:]'
+  config.input.data = dict(name='imagenet2012', split='train[4096:]')
+  config.input.batch_size = 512
+  config.input.shuffle_buffer_size = 50_000
 
-  config.batch_size = 512
   config.total_epochs = 50
 
   config.log_training_steps = 50
-  config.shuffle_buffer_size = 50_000
   config.ckpt_steps = 1000
   config.keep_ckpt_steps = 5000
-  config.ckpt_timeout = 1
   config.prefetch_to_device = 2
-  config.trial = 0
+  config.seed = 0
 
   # Optimizer section
   config.optax_name = 'big_vision.scale_by_adafactor'
@@ -127,19 +126,18 @@ def get_config(arg=''):
   config.evals.val = ConfigDict()
   config.evals.val.type = 'proj.uvim.compute_mean'
   config.evals.val.pred = 'validation'
-  config.evals.val.dataset = config.dataset
-  config.evals.val.split = 'train[:4096]'
+  config.evals.val.data = dict(name=config.input.data.name, split='train[:4096]')
   config.evals.val.pp_fn = pp_eval
   config.evals.val.log_steps = 1000
 
   base = {
-      'type': 'proj.uvim.colorization',
+      'type': 'proj.uvim.psnr',
       'pp_fn': pp_eval.replace('decode|', ''),
-      'log_steps': 2500,
+      'log_steps': 10_000,
   }
-  config.evals.colorization_train = dict(**base, split='train[4096:8192]')
-  config.evals.colorization_holdout = dict(**base, split='train[:4096]')
-  config.evals.colorization_val = dict(**base, split='validation')
+  config.evals.psnr_train = dict(**base, split='train[4096:8192]')
+  config.evals.psnr_holdout = dict(**base, split='train[:4096]')
+  config.evals.psnr_val = dict(**base, split='validation')
 
   config.evals.colorization_val_coltran_fid = {
       'type': 'proj.uvim.coltran_fid',
@@ -154,10 +152,10 @@ def get_config(arg=''):
   # config.evals.save_pred.outfile = 'inference.npz'
 
   if arg.singlehost:
-    config.batch_size = 32
+    config.input.batch_size = 32
     config.total_epochs = 20
   elif arg.runlocal:
-    config.batch_size = 8
-    config.val_split = 'validation[:256]'
-    config.shuffle_buffer_size = 10
+    config.input.batch_size = 8
+    config.input.shuffle_buffer_size = 10
+    config.evals.val.data.split = 'validation[:256]'
   return config

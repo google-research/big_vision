@@ -46,7 +46,8 @@ def get_config(arg=''):
   arg = bvcc.parse_arg(arg, runlocal=False, singlehost=False)
   config = ConfigDict()
 
-  config.pp_train = (
+  config.input = {}
+  config.input.pp = (
       f'decode|coco_panoptic|concat(["semantics","instances"], "labels")|'
       f'randu("fliplr")|det_fliplr(key="image")|det_fliplr(key="labels")|'
       f'inception_box|crop_box(key="image")|crop_box(key="labels")|'
@@ -68,19 +69,17 @@ def get_config(arg=''):
       f'keep("image","image_ctx","image/id")'  # image/id used for rng seeds.
   )
 
-  config.dataset = 'coco/2017_panoptic'
-  config.train_split = 'train[4096:]'
+  config.input.data = dict(name='coco/2017_panoptic', split='train[4096:]')
+  config.input.batch_size = 512
+  config.input.shuffle_buffer_size = 50_000
 
-  config.batch_size = 512
   config.total_epochs = 200
 
   config.log_training_steps = 50
-  config.shuffle_buffer_size = 50_000
   config.ckpt_steps = 1000
   config.keep_ckpt_steps = 5000
-  config.ckpt_timeout = 1
   config.prefetch_to_device = 2
-  config.trial = 0
+  config.seed = 0
 
   # Optimizer section
   config.optax_name = 'big_vision.scale_by_adafactor'
@@ -133,8 +132,7 @@ def get_config(arg=''):
   config.evals.val = ConfigDict()
   config.evals.val.type = 'proj.uvim.compute_mean'
   config.evals.val.pred = 'validation'
-  config.evals.val.dataset = config.dataset
-  config.evals.val.split = 'train[:4096]'
+  config.evals.val.data = dict(name=config.input.data.name, split='train[:4096]')
   config.evals.val.pp_fn = pp_eval
   config.evals.val.log_steps = 1000
 
@@ -157,10 +155,10 @@ def get_config(arg=''):
   # config.evals.save_pred.outfile = 'inference.npz'
 
   if arg.singlehost:
-    config.batch_size = 32
+    config.input.batch_size = 32
     config.num_epochs = 50
   elif arg.runlocal:
-    config.batch_size = 4
-    config.shuffle_buffer_size = 10
-    config.evals.val.split = 'train[:16]'
+    config.input.batch_size = 4
+    config.input.shuffle_buffer_size = 10
+    config.evals.val.data.split = 'train[:16]'
   return config

@@ -15,7 +15,6 @@
 """Tests for bert_ops."""
 
 import tempfile
-from unittest import mock
 
 from big_vision import input_pipeline
 import big_vision.pp.builder as pp_builder
@@ -36,14 +35,10 @@ _BERT_VOCAB = [
 ]
 
 
-def _create_ds(
-    mock_builder, pp_str, tensor_slices, num_examples, remove_tpu_dtypes):
-  ds = tf.data.Dataset.from_tensor_slices(tensor_slices)
-  mock_builder.return_value.as_dataset.return_value = ds
-  mock_builder.return_value.info.splits.__getitem__.return_value.num_examples = num_examples
+def _create_ds(pp_str, tensor_slices, num_examples, remove_tpu_dtypes):
   return input_pipeline.make_for_inference(
-      dataset="mocked",
-      split="test",
+      tf.data.Dataset.from_tensor_slices(tensor_slices),
+      num_ex_per_process=[num_examples],
       preprocess_fn=pp_builder.get_preprocess_fn(
           pp_str, remove_tpu_dtypes=remove_tpu_dtypes),
       batch_size=num_examples,
@@ -52,8 +47,7 @@ def _create_ds(
 
 class BertOpsTest(tf.test.TestCase):
 
-  @mock.patch("tensorflow_datasets.builder")
-  def test_tokenize(self, mock_builder):
+  def test_tokenize(self):
     inkey = "texts"
     vocab_path = f"{tempfile.mkdtemp()}/vocab.txt"
     with open(vocab_path, "w") as f:
@@ -65,7 +59,7 @@ class BertOpsTest(tf.test.TestCase):
     tensor_slices = {
         inkey: tf.ragged.constant([["one more"], ["more than one"], [""]])
     }
-    ds = _create_ds(mock_builder, pp_str, tensor_slices, 3, True)
+    ds = _create_ds(pp_str, tensor_slices, 3, True)
     self.assertAllEqual(
         next(iter(ds))["labels"],
         [[5, 4, 2, 0, 0], [5, 2, 3, 4, 0], [5, 0, 0, 0, 0]],

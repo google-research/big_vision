@@ -25,6 +25,7 @@ import os
 from absl import app
 from absl import flags
 from absl import logging
+import big_vision.datasets.core as ds_core
 import big_vision.evaluators.common as eval_common
 import big_vision.input_pipeline as input_pipeline
 import big_vision.optax as bv_optax
@@ -38,7 +39,8 @@ from ml_collections import config_flags
 import numpy as np
 import optax
 import tensorflow as tf
-import tensorflow.io.gfile as gfile
+
+from tensorflow.io import gfile
 
 # pylint: disable=logging-fstring-interpolation
 
@@ -65,10 +67,8 @@ def main(argv):
       f"{jax.local_device_count()}/{jax.device_count()} devices and "
       f"writing to workdir {workdir}.\u001b[0m")
 
-  assert not config.get("grad_accum_steps"), "Grad-acc not supported anymore."
-
   save_ckpt_path = None
-  if workdir and (config.get("ckpt_steps") or config.get("keep_ckpt_steps")):
+  if workdir:  # Always create if requested, even if we may not write into it.
     gfile.makedirs(workdir)
     save_ckpt_path = os.path.join(workdir, "checkpoint.npz")
 
@@ -76,7 +76,7 @@ def main(argv):
   pool = multiprocessing.pool.ThreadPool()
 
   # Here we register preprocessing ops from modules listed on `pp_modules`.
-  for m in config.get("pp_modules", ["ops_general", "ops_image"]):
+  for m in config.get("pp_modules", ["ops_general", "ops_image", "ops_text"]):
     importlib.import_module(f"big_vision.pp.{m}")
 
   # This seed makes the Jax part of things (like model init) deterministic.
@@ -95,7 +95,9 @@ def main(argv):
     if jax.process_index() == 0:
       info("%s", note)
 
-  batch_size = config.batch_size
+  write_note("Initializing...")
+
+  batch_size = config.input.batch_size
   if batch_size % jax.device_count() != 0:
     raise ValueError(f"Batch size ({batch_size}) must "
                      f"be divisible by device number ({jax.device_count()})")
@@ -110,21 +112,20 @@ def main(argv):
   chrono = u.Chrono()
 
   write_note("Initializing train dataset...")
+  train_data = ds_core.get(**config.input.data)
   train_ds = input_pipeline.make_for_train(
-      dataset=config.dataset,
-      split=config.train_split,
-      batch_size=config.batch_size,
-      preprocess_fn=pp_builder.get_preprocess_fn(config.pp_train),
-      shuffle_buffer_size=config.get("shuffle_buffer_size"),
-      cache_raw=config.get("cache_raw", False),
-      data_dir=fillin(config.get("dataset_dir")))
+      data=train_data.get_tfdata(ordered=False),
+      batch_size=batch_size,
+      preprocess_fn=pp_builder.get_preprocess_fn(config.input.get("pp")),
+      shuffle_buffer_size=config.input.get("shuffle_buffer_size"),
+      cache_raw=config.input.get("cache_raw", False),
+      filter_fn=config.input.get("filter_fn"),
+  )
 
+  # Start prefetching already.
   n_prefetch = config.get("prefetch_to_device", 1)
   train_iter = input_pipeline.start_input_pipeline(train_ds, n_prefetch)
-
-  ntrain_img = input_pipeline.get_num_examples(
-      config.dataset, config.train_split,
-      data_dir=fillin(config.get("dataset_dir")))
+  ntrain_img = train_data.total_examples
 
   def get_steps(name, default=ValueError):  # partial doesn't work well here.
     return u.steps(name, config, ntrain_img, batch_size, default)
@@ -144,7 +145,7 @@ def main(argv):
   @partial(jax.jit, backend="cpu")
   def init(rng):
     shape = tuple(train_ds.element_spec["image"].shape[1:])
-    bs = config.batch_size // jax.device_count()
+    bs = batch_size // jax.device_count()
     dummy_input = jnp.zeros((bs,) + shape, jnp.float32)
     params = flax.core.unfreeze(model.init(rng, dummy_input))["params"]
 
@@ -156,7 +157,8 @@ def main(argv):
     return params
 
   rng, rng_init = jax.random.split(rng)
-  params_cpu = init(rng_init)
+  with u.log_timing(mw, "z/secs/init"):
+    params_cpu = init(rng_init)
 
   if jax.process_index() == 0:
     num_params = sum(p.size for p in jax.tree_leaves(params_cpu))
@@ -186,7 +188,7 @@ def main(argv):
 
     def loss_fn(params, images, labels):
       logits, _ = model.apply(
-          {"params": flax.core.freeze(params)}, images,
+          {"params": params}, images,
           train=True, rngs={"dropout": rng_model_local})
       return getattr(u, config.get("loss", "sigmoid_xent"))(
           logits=logits, labels=labels)
@@ -253,9 +255,9 @@ def main(argv):
   params_repl = flax.jax_utils.replicate(params_cpu)
   opt_repl = flax.jax_utils.replicate(opt_cpu)
 
-  evaluators = eval_common.from_config(
-      config, {"predict": predict_fn},
-      lambda s: write_note(f"Initializing evaluator: {s}...\n{chrono.note}"))
+  # Initializing evaluators later when they are first needed, so we can see
+  # issues with training faster.
+  evaluators = None
 
   rng, rng_loop = jax.random.split(rng, 2)
   rngs_loop = flax.jax_utils.replicate(rng_loop)
@@ -263,14 +265,16 @@ def main(argv):
 
   write_note(f"First step compilations...\n{chrono.note}")
   error = None  # For exiting with an error after cleanup. Avoids indentation.
+
   # Using a python integer for step here, because opt.state.step is allocated
   # on TPU during replication.
   for step, batch in zip(range(first_step + 1, total_steps + 1), train_iter):
     mw.step_start(step)
 
     with jax.profiler.StepTraceAnnotation("train_step", step_num=step):
-      params_repl, opt_repl, rngs_loop, loss_value, measurements = update_fn(
-          params_repl, opt_repl, rngs_loop, batch["image"], batch["labels"])
+      with u.log_timing(mw, "z/secs/update0", noop=step > first_step + 1):
+        params_repl, opt_repl, rngs_loop, loss_value, measurements = update_fn(
+            params_repl, opt_repl, rngs_loop, batch["image"], batch["labels"])
 
     # On the first host, let's always profile a handful of early steps.
     if jax.process_index() == 0:
@@ -312,12 +316,18 @@ def main(argv):
           u.save_checkpoint, (ckpt, save_ckpt_path, copy_step))
       chrono.resume()
 
+    if evaluators is None:
+      evaluators = eval_common.from_config(
+          config, {"predict": predict_fn},
+          lambda s: write_note(f"Initializing evaluator: {s}...\n{chrono.note}")
+      )
     for (name, evaluator, log_steps, prefix) in evaluators:
       if u.itstime(step, log_steps, total_steps):
         chrono.pause(wait_for=params_repl)
         write_note(f"{name} evaluation...\n{chrono.note}")
-        for key, value in evaluator.run(params_repl):
-          mw.measure(f"{prefix}{key}", value)
+        with u.log_timing(mw, f"z/secs/eval/{name}"):
+          for key, value in evaluator.run(params_repl):
+            mw.measure(f"{prefix}{key}", value)
         chrono.resume()
     mw.step_end()
 
@@ -337,7 +347,7 @@ def main(argv):
   mw.close()
 
   # Make sure all hosts stay up until the end of main.
-  u.sync_all_hosts()
+  u.sync()
 
   # Before cleanup, as cleanup should only run for successful jobs.
   if error is not None:

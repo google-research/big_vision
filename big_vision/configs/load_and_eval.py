@@ -36,6 +36,7 @@ big_vision.tools.eval_only \
 
 import big_vision.configs.common as bvcc
 from big_vision.configs.common_fewshot import get_fewshot_lsr
+from big_vision.configs.proj.image_text import lit_eval
 import ml_collections as mlc
 
 
