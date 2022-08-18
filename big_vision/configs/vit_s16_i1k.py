@@ -34,21 +34,26 @@ def get_config():
   """Config for training."""
   config = mlc.ConfigDict()
 
-  config.dataset = 'imagenet2012'
-  config.train_split = 'train[:99%]'
-  config.cache_raw = True  # Requires up to 120GB of RAM!
-  config.shuffle_buffer_size = 250_000  # Per host, so small-ish is ok.
+  config.seed = 0
+  config.total_epochs = 90
   config.num_classes = 1000
   config.loss = 'softmax_xent'
-  config.batch_size = 1024
-  config.total_epochs = 90
+
+  config.input = {}
+  config.input.data = dict(
+      name='imagenet2012',
+      split='train[:99%]',
+  )
+  config.input.batch_size = 1024
+  config.input.cache_raw = True  # Needs up to 120GB of RAM!
+  config.input.shuffle_buffer_size = 250_000
 
   pp_common = (
       '|value_range(-1, 1)'
       '|onehot(1000, key="{lbl}", key_result="labels")'
       '|keep("image", "labels")'
   )
-  config.pp_train = (
+  config.input.pp = (
       'decode_jpeg_and_inception_crop(224)|flip_lr|randaug(2,10)' +
       pp_common.format(lbl='label')
   )
@@ -78,22 +83,20 @@ def get_config():
   config.mixup = dict(p=0.2, fold_in=None)
 
   # Eval section
-  eval_common = dict(
-      type='classification',
-      dataset='imagenet2012',
-      pp_fn=pp_eval.format(lbl='label'),
-      loss_name=config.loss,
-      log_steps=2500,  # Very fast O(seconds) so it's fine to run it often.
-  )
+  def get_eval(split, dataset='imagenet2012'):
+    return dict(
+        type='classification',
+        data=dict(name=dataset, split=split),
+        pp_fn=pp_eval.format(lbl='label'),
+        loss_name=config.loss,
+        log_steps=2500,  # Very fast O(seconds) so it's fine to run it often.
+    )
   config.evals = {}
-  config.evals.train = {**eval_common, 'split': 'train[:2%]'}
-  config.evals.minival = {**eval_common, 'split': 'train[99%:]'}
-  config.evals.val = {**eval_common, 'split': 'validation'}
-  config.evals.v2 = {**eval_common, 'dataset': 'imagenet_v2', 'split': 'test'}
-
-  config.evals.real = dict(**eval_common)
-  config.evals.real.dataset = 'imagenet2012_real'
-  config.evals.real.split = 'validation'
+  config.evals.train = get_eval('train[:2%]')
+  config.evals.minival = get_eval('train[99%:]')
+  config.evals.val = get_eval('validation')
+  config.evals.v2 = get_eval('test', dataset='imagenet_v2')
+  config.evals.real = get_eval('validation', dataset='imagenet2012_real')
   config.evals.real.pp_fn = pp_eval.format(lbl='real_label')
 
   return config

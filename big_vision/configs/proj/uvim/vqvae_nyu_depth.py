@@ -35,14 +35,15 @@ def get_config(arg='res=512,patch_size=16'):
 
   config.task = 'proj.uvim.depth_task'
 
-  config.dataset = 'nyu_depth_v2'
-  config.train_split = 'train'
+  config.input = {}
+  config.input.data = dict(name='nyu_depth_v2', split='train)
 
-  config.trial = 0
-  config.batch_size = 1024
+  config.input.batch_size = 1024
+  config.input.shuffle_buffer_size = 25_000
+
   config.total_epochs = 200
 
-  config.pp_train = (
+  config.input.pp = (
       f'decode|nyu_depth|'
       f'randu("fliplr")|det_fliplr(key="image")|det_fliplr(key="labels")|'
       f'inception_box|crop_box(key="image")|crop_box(key="labels")|'
@@ -64,11 +65,9 @@ def get_config(arg='res=512,patch_size=16'):
       f'keep("image","labels","ground_truth")'
   )
 
-  config.shuffle_buffer_size = 25_000
-
   config.log_training_steps = 50
   config.ckpt_steps = 1000
-  config.keep_ckpt_steps = 20000
+  config.keep_ckpt_steps = 20_000
 
   # Model section
   config.min_depth = MIN_DEPTH
@@ -113,14 +112,14 @@ def get_config(arg='res=512,patch_size=16'):
   config.evals.val = mlc.ConfigDict()
   config.evals.val.type = 'proj.uvim.compute_mean'
   config.evals.val.pred = 'validation'
-  config.evals.val.dataset = config.dataset
-  config.evals.val.split = 'validation'
+  config.evals.val.data = {**config.input.data}
+  config.evals.val.data.split = 'validation'
   config.evals.val.pp_fn = pp_eval
   config.evals.val.log_steps = 250
 
   base = {
       'type': 'proj.uvim.nyu_depth',
-      'dataset': config.dataset,
+      'dataset': config.input.data.name,
       'pp_fn': pp_pred,
       'log_steps': 2000,
       'min_depth': MIN_DEPTH,
@@ -128,16 +127,18 @@ def get_config(arg='res=512,patch_size=16'):
   }
   config.evals.nyu_depth_val = dict(**base, split='validation')
 
+  config.seed = 0
+
   if arg.singlehost:
-    config.batch_size = 128
+    config.input.batch_size = 128
     config.total_epochs = 50
   elif arg.runlocal:
-    config.batch_size = 16
-    config.shuffle_buffer_size = 10
+    config.input.batch_size = 16
+    config.input.shuffle_buffer_size = 10
     config.log_training_steps = 5
     config.model.enc_depth = 1
     config.model.dec_depth = 1
-    config.evals.val.split = 'validation[:16]'
+    config.evals.val.data.split = 'validation[:16]'
     config.evals.val.log_steps = 20
 
   return config

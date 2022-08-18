@@ -28,23 +28,25 @@ def get_config():
   """Config for training on imagenet-21k."""
   config = mlc.ConfigDict()
 
-  config.dataset = 'imagenet21k'
-  config.train_split = 'full[51200:]'
+  config.seed = 0
+  config.total_epochs = 90
   config.num_classes = 21843
   config.init_head_bias = -10.0
   config.loss = 'sigmoid_xent'
 
-  config.trial = 0
-  config.batch_size = 4096
-  config.total_epochs = 90
+  config.input = dict()
+  config.input.data = dict(
+      name='imagenet21k',
+      split='full[51200:]',
+  )
+  config.input.batch_size = 4096
+  config.input.shuffle_buffer_size = 250_000  # Per host, so small-ish is ok.
 
   pp_common = '|value_range(-1, 1)|onehot({onehot_args})|keep("image", "labels")'
   pp_common_i21k = pp_common.format(onehot_args=f'{config.num_classes}')
   pp_common_i1k = pp_common.format(onehot_args='1000, key="label", key_result="labels"')
-  config.pp_train = 'decode_jpeg_and_inception_crop(224)|flip_lr' + pp_common_i21k
-  pp_eval = 'decode|resize_small(256)|central_crop(224)' + pp_common_i21k
-  pp_eval_i1k = 'decode|resize_small(256)|central_crop(224)' + pp_common_i1k
-  config.shuffle_buffer_size = 250_000  # Per host, so small-ish is ok.
+  config.input.pp = 'decode_jpeg_and_inception_crop(224)|flip_lr' + pp_common_i21k
+  pp_eval = 'decode|resize_small(256)|central_crop(224)'
 
   config.log_training_steps = 50
   config.ckpt_steps = 1000
@@ -58,22 +60,23 @@ def get_config():
   config.grad_clip_norm = 1.0
 
   # linear scaling rule. Don't forget to sweep if sweeping batch_size.
-  config.lr = (0.03 / 256) * config.batch_size
-  config.wd = (3e-5 / 256) * config.batch_size
+  config.lr = (0.03 / 256) * config.input.batch_size
+  config.wd = (3e-5 / 256) * config.input.batch_size
   config.schedule = dict(decay_type='cosine', warmup_steps=5000)
 
-  # Eval section
-  eval_common = dict(
-      type='classification',
-      dataset=config.dataset,
-      pp_fn=pp_eval,
-      loss_name=config.loss,
-      log_steps=1000,  # Very fast O(seconds) so it's fine to run it often.
-  )
+  # Evaluations on i21k itself.
+  def eval_i21k(split):
+    return dict(
+        type='classification',
+        data={**config.input.data, 'split': split},
+        pp_fn=pp_eval + pp_common_i21k,
+        loss_name=config.loss,
+        log_steps=1000,  # Very fast O(seconds) so it's fine to run it often.
+    )
   config.evals = {}
-  config.evals.test = {**eval_common, 'split': 'full[:25_600]'}
-  config.evals.val = {**eval_common, 'split': 'full[25_600:51_200]'}
-  config.evals.train = {**eval_common, 'split': 'full[51_200:76_800]'}
+  config.evals.test = eval_i21k('full[:25_600]')
+  config.evals.val = eval_i21k('full[25_600:51_200]')
+  config.evals.train = eval_i21k('full[51_200:76_800]')
 
   # Few-shot evaluators
   config.evals.fewshot = get_fewshot_lsr()

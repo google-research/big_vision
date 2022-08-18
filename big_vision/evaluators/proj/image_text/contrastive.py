@@ -16,6 +16,7 @@
 import functools
 
 from big_vision import input_pipeline
+import big_vision.datasets.core as ds_core
 import big_vision.pp.builder as pp_builder
 import big_vision.utils as u
 import jax
@@ -59,13 +60,15 @@ def get_eval_fn(predict_fn, use_global_batch):
 class Evaluator:
   """Contrastive evaluator."""
 
-  def __init__(self, predict_fn, dataset, split, pp_fn, batch_size,
-               use_global_batch, data_dir=None, cache_final=True,
+  def __init__(self, predict_fn, data, pp_fn, batch_size,
+               use_global_batch, cache_final=True,
                cache_raw=False, prefetch=1, label_key="labels"):
+    data = ds_core.get(**data)
     pp_fn = pp_builder.get_preprocess_fn(pp_fn)
     self.ds, self.steps = input_pipeline.make_for_inference(
-        dataset, split, pp_fn, batch_size, data_dir, cache_final=cache_final,
-        cache_raw=cache_raw)
+        data.get_tfdata(ordered=True), pp_fn, batch_size,
+        num_ex_per_process=data.num_examples_per_process(),
+        cache_final=cache_final, cache_raw=cache_raw)
     self.data_iter = input_pipeline.start_input_pipeline(self.ds, prefetch)
     self.eval_fn = get_eval_fn(predict_fn, use_global_batch)
     self.label_key = label_key

@@ -16,6 +16,7 @@
 # pylint: disable=consider-using-from-import
 from functools import partial, lru_cache
 
+import big_vision.datasets.core as ds_core
 import big_vision.input_pipeline as input_pipeline
 import big_vision.pp.builder as pp_builder
 import big_vision.utils as u
@@ -54,12 +55,14 @@ def get_eval_fn(predict_fn, loss_name):
 class Evaluator:
   """Classification evaluator."""
 
-  def __init__(self, predict_fn, dataset, split, pp_fn, batch_size, loss_name,
-               data_dir=None, cache_final=True, cache_raw=False, prefetch=1,
+  def __init__(self, predict_fn, data, pp_fn, batch_size, loss_name,
+               cache_final=True, cache_raw=False, prefetch=1,
                label_key='labels'):
+    data = ds_core.get(**data)
     pp_fn = pp_builder.get_preprocess_fn(pp_fn)
     self.ds, self.steps = input_pipeline.make_for_inference(
-        dataset, split, pp_fn, batch_size, data_dir,
+        data.get_tfdata(ordered=True), pp_fn, batch_size,
+        num_ex_per_process=data.num_examples_per_process(),
         cache_final=cache_final, cache_raw=cache_raw)
     self.data_iter = input_pipeline.start_input_pipeline(self.ds, prefetch)
     self.eval_fn = get_eval_fn(predict_fn, loss_name)

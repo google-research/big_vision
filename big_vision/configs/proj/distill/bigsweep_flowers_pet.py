@@ -50,18 +50,21 @@ def get_config(arg=None):
   arg = bvcc.parse_arg(arg, runlocal=False, data='flowers', variant='medium', crop='inception_crop(128)')
   config = mlc.ConfigDict()
 
-  config.dataset = dict(flowers='oxford_flowers102', pet='oxford_iiit_pet')[arg.data]
-  config.cache_raw = True
+  config.input = {}
+  config.input.data = dict(
+      name=dict(flowers='oxford_flowers102', pet='oxford_iiit_pet')[arg.data],
+      split=dict(flowers='train', pet='train[:90%]')[arg.data],
+  )
+  config.input.batch_size = 512
+  config.input.cache_raw = True
+  config.input.shuffle_buffer_size = 50_000
   config.prefetch_to_device = 4
-  config.train_split = dict(flowers='train', pet='train[:90%]')[arg.data]
-  config.num_classes = NCLS[arg.data]
 
-  config.batch_size = 512
-  config.num_epochs = {
+  config.num_classes = NCLS[arg.data]
+  config.total_epochs = {
       'flowers': {'fast': 10_000, 'medium': 100_000, 'long': 1_000_000},
       'pet': {'fast': 1000, 'medium': 3000, 'long': 30_000},
   }[arg.data][arg.variant]
-  config.shuffle_buffer_size = 50_000
 
   config.log_training_steps = 100
   config.ckpt_steps = 2500
@@ -81,7 +84,7 @@ def get_config(arg=None):
       f'|onehot({config.num_classes}, key="label", key_result="labels")'
       '|keep("image", "labels")'
   )
-  config.pp_train = f'decode|{arg.crop}|flip_lr' + pp_common
+  config.input.pp = f'decode|{arg.crop}|flip_lr' + pp_common
   ppv = 'decode|resize_small(160)|central_crop(128)' + pp_common
 
   config.mixup = dict(p=1.0, n=2)
@@ -118,18 +121,19 @@ def get_config(arg=None):
     val_split = 'train[90%:]' if not arg.runlocal else 'train[:16]'
     test_split = 'test' if not arg.runlocal else 'test[:16]'
 
-  base = dict(
-      type='classification',
-      pred='student_fwd',
-      dataset=config.dataset,
-      pp_fn=ppv,
-      loss_name='softmax_xent',
-      log_steps=500,
-  )
+  def get_eval(split):
+    return dict(
+        type='classification',
+        pred='student_fwd',
+        data=dict(name=config.input.data.name, split=split),
+        pp_fn=ppv,
+        loss_name='softmax_xent',
+        log_steps=500,
+    )
   config.evals = {}
-  config.evals.student_train = {**base, 'split': minitrain_split}
-  config.evals.student_val = {**base, 'split': val_split}
-  config.evals.student_test = {**base, 'split': test_split}
+  config.evals.student_train = get_eval(minitrain_split)
+  config.evals.student_val = get_eval(val_split)
+  config.evals.student_test = get_eval(test_split)
 
   # Teacher is fixed, so rare evals.
   teacher = dict(log_steps=100_000, pred='prof_m_fwd')
@@ -138,22 +142,23 @@ def get_config(arg=None):
   config.evals.teacher_test = {**config.evals.student_test, **teacher}
 
   # Could in principle also look at agreement on other datasets!
-  dist = dict(
-      type='proj.distill.distance',
-      pred='student_prof_m_fwd',
-      dataset=config.dataset,
-      pp_fn=ppv + '|keep("image")',
-      log_steps=1000,
-      distances=({'kind': 'kl'}, {'kind': 'euclidean'},
-                 {'kind': 'agree', 'k': 1}, {'kind': 'agree', 'k': 5}),
-  )
-  config.evals.dist_train = {**dist, 'split': minitrain_split}
-  config.evals.dist_val = {**dist, 'split': val_split}
-  config.evals.dist_test = {**dist, 'split': test_split}
+  def get_dist(split):
+    return dict(
+        type='proj.distill.distance',
+        pred='student_prof_m_fwd',
+        data=dict(name=config.input.data.name, split=split),
+        pp_fn=ppv + '|keep("image")',
+        log_steps=1000,
+        distances=({'kind': 'kl'}, {'kind': 'euclidean'},
+                   {'kind': 'agree', 'k': 1}, {'kind': 'agree', 'k': 5}),
+    )
+  config.evals.dist_train = get_dist(minitrain_split)
+  config.evals.dist_val = get_dist(val_split)
+  config.evals.dist_test = get_dist(test_split)
 
   # Make a few things much smaller for quick local debugging testruns.
   if arg.runlocal:
-    config.shuffle_buffer_size = 10
-    config.batch_size = 8
+    config.input.shuffle_buffer_size = 10
+    config.input.batch_size = 8
 
   return config

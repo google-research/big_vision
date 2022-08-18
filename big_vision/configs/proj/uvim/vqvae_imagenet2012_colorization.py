@@ -22,21 +22,22 @@ import ml_collections as mlc
 
 
 def get_config(arg='res=512,patch_size=16'):
-  """Config for training label compression on COCO-panoptic."""
+  """A config for training a UViM stage I model for the colorization task."""
   arg = bvcc.parse_arg(arg, res=512, patch_size=16,
-                       runlocal=False, singlehost=True)
+                       runlocal=False, singlehost=False)
   config = mlc.ConfigDict()
 
   config.task = 'proj.uvim.colorization_task'
 
-  config.dataset = 'imagenet2012'
-  config.train_split = 'train[4096:]'
+  config.input = {}
+  config.input.data = dict(name='imagenet2012', split='train[4096:]')
 
-  config.trial = 0
-  config.batch_size = 1024
+  config.input.batch_size = 1024
+  config.input.shuffle_buffer_size = 25_000
+
   config.total_epochs = 100
 
-  config.pp_train = (
+  config.input.pp = (
       f'decode_jpeg_and_inception_crop({arg.res})'
       f'|flip_lr'
       f'|copy(inkey="image", outkey="labels")'
@@ -54,11 +55,9 @@ def get_config(arg='res=512,patch_size=16'):
       f'|value_range(-1,1,key="labels")'
       f'|keep("image","labels")')
 
-  config.shuffle_buffer_size = 25_000
-
   config.log_training_steps = 50
   config.ckpt_steps = 1000
-  config.keep_ckpt_steps = 20000
+  config.keep_ckpt_steps = 20_000
 
   # Model section
   config.model_name = 'proj.uvim.vit'
@@ -101,19 +100,19 @@ def get_config(arg='res=512,patch_size=16'):
   config.evals.val = mlc.ConfigDict()
   config.evals.val.type = 'proj.uvim.compute_mean'
   config.evals.val.pred = 'validation'
-  config.evals.val.dataset = config.dataset
-  config.evals.val.split = 'train[:4096]'
+  config.evals.val.data = {**config.input.data}
+  config.evals.val.data.split = 'train[:4096]'
   config.evals.val.pp_fn = pp_eval
   config.evals.val.log_steps = 250
 
   base = {
-      'type': 'proj.uvim.colorization',
+      'type': 'proj.uvim.psnr',
       'pp_fn': pp_eval.replace('decode|', ''),
-      'log_steps': 2500,
+      'log_steps': 10_000,
   }
-  config.evals.colorization_train = dict(**base, split='train[4096:8192]')
-  config.evals.colorization_holdout = dict(**base, split='train[:4096]')
-  config.evals.colorization_val = dict(**base, split='validation')
+  config.evals.psnr_train = dict(**base, split='train[4096:8192]')
+  config.evals.psnr_holdout = dict(**base, split='train[:4096]')
+  config.evals.psnr_val = dict(**base, split='validation')
 
   config.evals.colorization_val_coltran_fid = {
       'type': 'proj.uvim.coltran_fid',
@@ -127,25 +126,25 @@ def get_config(arg='res=512,patch_size=16'):
   # config.evals.save_pred.split = 'validation[:1024]'
   # config.evals.save_pred.outfile = 'inference.npz'
 
-  config.trial = 0
+  config.seed = 0
 
   if arg.singlehost:
-    config.batch_size = 128
+    config.input.batch_size = 128
     config.total_epochs = 20
   elif arg.runlocal:
-    config.batch_size = 16
-    config.shuffle_buffer_size = 10
+    config.input.batch_size = 16
+    config.input.shuffle_buffer_size = 10
     config.log_training_steps = 5
     config.model.enc_depth = 1
     config.model.dec_depth = 1
-    config.evals.val.split = 'validation[:16]'
+    config.evals.val.data.split = 'validation[:16]'
     config.evals.val.log_steps = 20
-    config.evals.colorization_train.split = 'train[:256]'
-    config.evals.colorization_train.log_steps = 20
-    config.evals.colorization_holdout.split = 'train[256:512]'
-    config.evals.colorization_holdout.log_steps = 20
-    config.evals.colorization_val.split = 'train[:256]'
-    config.evals.colorization_val.log_steps = 20
+    config.evals.psnr_train.split = 'train[:256]'
+    config.evals.psnr_train.log_steps = 20
+    config.evals.psnr_holdout.split = 'train[256:512]'
+    config.evals.psnr_holdout.log_steps = 20
+    config.evals.psnr_val.split = 'train[:256]'
+    config.evals.psnr_val.log_steps = 20
     config.evals.colorization_val_coltran_fid.split = 'validation[:256]'
     config.evals.colorization_val_coltran_fid.log_steps = 20
 

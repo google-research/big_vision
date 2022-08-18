@@ -25,7 +25,7 @@ using the smaller datasets.
 big_vision.trainers.proj.distill.distill \
     --config big_vision/configs/proj/distill/bit_i1k.py \
     --workdir gs://[your_bucket]/big_vision/`date '+%m-%d_%H%M'` \
-    --config.num_epochs 1200
+    --config.total_epochs 1200
 """
 
 import big_vision.configs.common as bvcc
@@ -39,13 +39,13 @@ def get_config(arg=None):
   arg = bvcc.parse_arg(arg, runlocal=False)
   config = mlc.ConfigDict()
 
-  config.dataset = 'imagenet2012'
-  config.train_split = 'train[:98%]'
-  config.num_classes = 1000
+  config.input = {}
+  config.input.data = dict(name='imagenet2012', split='train[:98%]')
+  config.input.batch_size = 4096
+  config.input.shuffle_buffer_size = 250_000
 
-  config.batch_size = 4096
-  config.num_epochs = 1200  # A good middle-ground
-  config.shuffle_buffer_size = 250_000
+  config.num_classes = 1000
+  config.total_epochs = 1200  # A good middle-ground
 
   config.log_training_steps = 50
   config.ckpt_steps = 1000
@@ -67,11 +67,11 @@ def get_config(arg=None):
       '|onehot(1000, key="{lbl}", key_result="labels")'
       '|keep("image", "labels")'
   )
-  config.pp_train = (
+  config.input.pp = (
       'decode_jpeg_and_inception_crop(224)|flip_lr' +
       pp_common.format(lbl='label')
   )
-  ppv = 'decode|{crop}' + pp_common
+  ppv = 'decode|resize_small(256)|central_crop(224)' + pp_common
 
   config.mixup = dict(p=1.0, n=2)
 
@@ -95,26 +95,23 @@ def get_config(arg=None):
   real_split = 'validation' if not arg.runlocal else 'validation[:16]'
   v2_split = 'test' if not arg.runlocal else 'test[:16]'
 
-  base = dict(
-      type='classification',
-      pred='student_fwd',
-      dataset='imagenet2012',
-      pp_fn=ppv.format(lbl='label', crop='resize_small(256)|central_crop(224)'),
-      loss_name='softmax_xent',
-      log_steps=1000,
-  )
+  def get_eval(split, dataset='imagenet2012'):
+    return dict(
+        type='classification',
+        pred='student_fwd',
+        data=dict(name=dataset, split=split),
+        pp_fn=ppv.format(lbl='label'),
+        loss_name='softmax_xent',
+        log_steps=1000,
+    )
 
   config.evals = {}
-  config.evals.student_train = {**base, 'split': minitrain_split}
-  config.evals.student_minival = {**base, 'split': minival_split}
-  config.evals.student_val = {**base, 'split': val_split}
-  config.evals.student_v2 = {**base, 'dataset': 'imagenet_v2', 'split': v2_split}
-
-  config.evals.student_real = dict(**base)
-  config.evals.student_real.dataset = 'imagenet2012_real'
-  config.evals.student_real.split = real_split
-  config.evals.student_real.pp_fn = ppv.format(
-      lbl='real_label', crop='resize_small(256)|central_crop(224)')
+  config.evals.student_train = get_eval(minitrain_split)
+  config.evals.student_minival = get_eval(minival_split)
+  config.evals.student_val = get_eval(val_split)
+  config.evals.student_v2 = get_eval(v2_split, dataset='imagenet_v2')
+  config.evals.student_real = get_eval(real_split, dataset='imagenet2012_real')
+  config.evals.student_real.pp_fn = ppv.format(lbl='real_label')
 
   config.evals.student_fewshot = get_fewshot_lsr(runlocal=arg.runlocal)
   config.evals.student_fewshot.pred = 'student_fwd'
@@ -133,23 +130,38 @@ def get_config(arg=None):
   config.evals.teacher_fewshot.prefix = 'z_teacher/'
 
   # Could in principle also look at agreement on other datasets!
-  dist = dict(
-      type='proj.distill.distance',
-      pred='student_prof_m_fwd',
-      dataset='imagenet2012',
-      pp_fn=ppv.format(lbl='label', crop='resize_small(256)|central_crop(224)') + '|keep("image")',
-      log_steps=1000,
-      distances=({'kind': 'kl'}, {'kind': 'euclidean'},
-                 {'kind': 'agree', 'k': 1}, {'kind': 'agree', 'k': 5}),
-  )
-  config.evals.dist_train = {**dist, 'split': minitrain_split}
-  config.evals.dist_minival = {**dist, 'split': minival_split}
-  config.evals.dist_val = {**dist, 'split': val_split}
-  config.evals.dist_v2 = {**dist, 'split': v2_split}
+  def get_dist(split, dataset='imagenet2012'):
+    return dict(
+        type='proj.distill.distance',
+        pred='student_prof_m_fwd',
+        data=dict(name=dataset, split=split),
+        pp_fn=ppv.format(lbl='label') + '|keep("image")',
+        log_steps=1000,
+        distances=({'kind': 'kl'}, {'kind': 'euclidean'},
+                   {'kind': 'agree', 'k': 1}, {'kind': 'agree', 'k': 5}),
+    )
+  config.evals.dist_train = get_dist(minitrain_split)
+  config.evals.dist_minival = get_dist(minival_split)
+  config.evals.dist_val = get_dist(val_split)
+  config.evals.dist_v2 = get_dist(v2_split, dataset='imagenet_v2')
+
+  # NOTE: CKA evaluator does not work with batch padding, so the size of the
+  # split must be a multiple of the batch size.
+  def get_cka(split):
+    return dict(
+        type='proj.distill.cka',
+        pred='student_prof_m_fwd',
+        data=dict(name='imagenet2012', split=split),
+        pp_fn=ppv.format(lbl='label') + '|keep("image")',
+        log_steps=1000,
+    )
+  config.evals.cka_train = get_cka('train[:24576]' if not arg.runlocal else 'train[:16]')
+  config.evals.cka_minival = get_cka('train[-24576:]' if not arg.runlocal else 'train[:16]')
+  config.evals.cka_val = get_cka('validation[:49152]' if not arg.runlocal else 'validation[:16]')
 
   # Make a few things much smaller for quick local debugging testruns.
   if arg.runlocal:
-    config.shuffle_buffer_size = 10
-    config.batch_size = 8
+    config.input.shuffle_buffer_size = 10
+    config.input.batch_size = 8
 
   return config

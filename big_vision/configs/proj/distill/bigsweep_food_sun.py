@@ -40,7 +40,7 @@ import big_vision.configs.proj.distill.common as cd
 import ml_collections as mlc
 
 H, L = 160, 128
-CLS = dict(food=101, sun=397)
+NCLS = dict(food=101, sun=397)
 
 
 def get_config(arg=None):
@@ -48,15 +48,18 @@ def get_config(arg=None):
   arg = bvcc.parse_arg(arg, runlocal=False, data='food', variant='medium', crop='inception_crop(128)')
   config = mlc.ConfigDict()
 
-  config.dataset = dict(food='food101', sun='sun397')[arg.data]
-  config.cache_raw = True
+  config.input = {}
+  config.input.data = dict(
+      name=dict(food='food101', sun='sun397')[arg.data],
+      split=dict(food='train[:90%]', sun='train')[arg.data],
+  )
+  config.input.batch_size = 512
+  config.input.cache_raw = True
+  config.input.shuffle_buffer_size = 50_000
   config.prefetch_to_device = 4
-  config.train_split = dict(food='train[:90%]', sun='train')[arg.data]
-  config.num_classes = CLS[arg.data]
 
-  config.batch_size = 512
-  config.num_epochs = {'fast': 100, 'medium': 1000, 'long': 3000}[arg.variant]
-  config.shuffle_buffer_size = 50_000
+  config.num_classes = NCLS[arg.data]
+  config.total_epochs = {'fast': 100, 'medium': 1000, 'long': 3000}[arg.variant]
 
   config.log_training_steps = 50
   config.ckpt_steps = 2500
@@ -76,7 +79,7 @@ def get_config(arg=None):
       f'|onehot({config.num_classes}, key="label", key_result="labels")'
       '|keep("image", "labels")'
   )
-  config.pp_train = f'decode|{arg.crop}|flip_lr' + pp_common
+  config.input.pp = f'decode|{arg.crop}|flip_lr' + pp_common
   ppv = 'decode|resize_small(160)|central_crop(128)' + pp_common
 
   config.mixup = dict(p=1.0, n=2)
@@ -113,18 +116,19 @@ def get_config(arg=None):
     val_split = 'validation' if not arg.runlocal else 'validation[:16]'
     test_split = 'test' if not arg.runlocal else 'test[:16]'
 
-  base = dict(
-      type='classification',
-      pred='student_fwd',
-      dataset=config.dataset,
-      pp_fn=ppv,
-      loss_name='softmax_xent',
-      log_steps=500,
-  )
+  def get_eval(split):
+    return dict(
+        type='classification',
+        pred='student_fwd',
+        data=dict(name=config.input.data.name, split=split),
+        pp_fn=ppv,
+        loss_name='softmax_xent',
+        log_steps=500,
+    )
   config.evals = {}
-  config.evals.student_train = {**base, 'split': minitrain_split}
-  config.evals.student_val = {**base, 'split': val_split}
-  config.evals.student_test = {**base, 'split': test_split}
+  config.evals.student_train = get_eval(minitrain_split)
+  config.evals.student_val = get_eval(val_split)
+  config.evals.student_test = get_eval(test_split)
 
   # Teacher is fixed, so rare evals.
   teacher = dict(log_steps=100_000, pred='prof_m_fwd')
@@ -133,33 +137,35 @@ def get_config(arg=None):
   config.evals.teacher_test = {**config.evals.student_test, **teacher}
 
   # Could in principle also look at agreement on other datasets!
-  dist = dict(
-      type='proj.distill.distance',
-      pred='student_prof_m_fwd',
-      dataset=config.dataset,
-      pp_fn=ppv + '|keep("image")',
-      log_steps=1000,
-      distances=({'kind': 'kl'}, {'kind': 'euclidean'},
-                 {'kind': 'agree', 'k': 1}, {'kind': 'agree', 'k': 5}),
-  )
-  config.evals.dist_train = {**dist, 'split': minitrain_split}
-  config.evals.dist_val = {**dist, 'split': val_split}
-  config.evals.dist_test = {**dist, 'split': test_split}
+  def get_dist(split):
+    return dict(
+        type='proj.distill.distance',
+        pred='student_prof_m_fwd',
+        data=dict(name=config.input.data.name, split=split),
+        pp_fn=ppv + '|keep("image")',
+        log_steps=1000,
+        distances=({'kind': 'kl'}, {'kind': 'euclidean'},
+                   {'kind': 'agree', 'k': 1}, {'kind': 'agree', 'k': 5}),
+    )
+  config.evals.dist_train = get_dist(minitrain_split)
+  config.evals.dist_val = get_dist(val_split)
+  config.evals.dist_test = get_dist(test_split)
 
   # Make a few things much smaller for quick local debugging testruns.
   if arg.runlocal:
-    config.shuffle_buffer_size = 10
-    config.batch_size = 8
+    config.input.shuffle_buffer_size = 10
+    config.input.batch_size = 8
 
   return config
 
 
 def get_hyper(hyper):
   """Hyper sweep."""
+  # TODO: update, similar to flowers_pet sweep.
   # By default, not running the MASSIVE sweep, just the recommended setting
   # across durations. However, code for sweep is left for reference/convenience.
   return hyper.zipit([
-      hyper.sweep('config.num_epochs', [100, 1_000]),
+      hyper.sweep('config.total_epochs', [100, 1_000]),
       hyper.sweep('config.mixup.p', [0.0, 1.0]),
       hyper.sweep('config.weight_decay', [1e-3, 1e-5]),
   ])
@@ -173,7 +179,7 @@ def get_hyper(hyper):
   def setting(p, l, m, crop, pp_end=None, **extra):
     pp_end = pp_end or (
         f'|value_range(-1, 1, key="image")'
-        f'|onehot({CLS}, key="label", key_result="labels")'
+        f'|onehot({NCLS}, key="label", key_result="labels")'
         f'|keep("image", "labels")'
     )
     return hyper.product([
@@ -186,7 +192,7 @@ def get_hyper(hyper):
   # Mixup, Layers and Mag in randaug.
   plm = [(0.0, 0, 0), (0.1, 0, 0), (0.5, 0, 0), (1.0, 0, 0)]
   return hyper.product([
-      hyper.sweep('config.num_epochs', [100, 1000, 3000]),
+      hyper.sweep('config.total_epochs', [100, 1000, 3000]),
       hyper.sweep('config.lr.base', [0.001, 0.003, 0.01]),
       hyper.sweep('config.distance_kw.t', [1.0, 2.0, 5.0, 10.0]),
       hyper.sweep('config.weight_decay', [1e-5, 3e-5, 1e-4, 3e-4, 1e-3]),
@@ -198,7 +204,7 @@ def get_hyper(hyper):
                    pp_end=(
                        f'|value_range(-1, 1, key="student")'
                        f'|value_range(-1, 1, key="teacher")'
-                       f'|onehot({CLS}, key="label", key_result="labels")'
+                       f'|onehot({NCLS}, key="label", key_result="labels")'
                        f'|keep("student", "teacher", "labels")'))
            for p, l, m in plm] +
           [setting(p=p, l=l, m=m, crop=f'inception_crop({L})') for

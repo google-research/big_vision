@@ -15,7 +15,6 @@
 """Tests for bert."""
 
 import tempfile
-from unittest import mock
 
 from big_vision import input_pipeline
 from big_vision.models.proj.flaxformer import bert
@@ -44,19 +43,15 @@ _TOKEN_LEN = 16
 
 class BertTest(tf.test.TestCase):
 
-  @mock.patch("tensorflow_datasets.builder")
-  def test_load_apply(self, mock_builder):
+  def test_load_apply(self):
     inkey = "text"
-    ds = tf.data.Dataset.from_tensor_slices(
-        {inkey: tf.ragged.constant([["this is a test"]])})
-    mock_builder.return_value.as_dataset.return_value = ds
-    mock_builder.return_value.info.splits.__getitem__.return_value.num_examples = 1
     vocab_path = f"{tempfile.mkdtemp()}/vocab.txt"
     with open(vocab_path, "w") as f:
       f.write("\n".join(_BERT_VOCAB))
     ds2, _ = input_pipeline.make_for_inference(
-        dataset="mocked",
-        split="test",
+        tf.data.Dataset.from_tensor_slices(
+            {inkey: tf.ragged.constant([["this is a test"]])}),
+        num_ex_per_process=[1],
         preprocess_fn=pp_builder.get_preprocess_fn(
             f"bert_tokenize(inkey='{inkey}', vocab_path='{vocab_path}', "
             f"max_len={_TOKEN_LEN})"

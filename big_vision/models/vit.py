@@ -246,10 +246,10 @@ def decode_variant(variant):
   return {
       # pylint:disable=line-too-long
       # Reference: Table 2 of https://arxiv.org/abs/2106.04560.
-      "width": {"Ti": 192, "S": 384, "M": 512, "B": 768, "L": 1024, "H": 1280, "g": 1408, "G": 1664}[v],
-      "depth": {"Ti": 12, "S": 12, "M": 12, "B": 12, "L": 24, "H": 32, "g": 40, "G": 48}[v],
-      "mlp_dim": {"Ti": 768, "S": 1536, "M": 2048, "B": 3072, "L": 4096, "H": 5120, "g": 6144, "G": 8192}[v],
-      "num_heads": {"Ti": 3, "S": 6, "M": 8, "B": 12, "L": 16, "H": 16, "g": 16, "G": 16}[v],
+      "width": {"Ti": 192, "S": 384, "M": 512, "B": 768, "L": 1024, "H": 1280, "g": 1408, "G": 1664, "e": 1792}[v],
+      "depth": {"Ti": 12, "S": 12, "M": 12, "B": 12, "L": 24, "H": 32, "g": 40, "G": 48, "e": 56}[v],
+      "mlp_dim": {"Ti": 768, "S": 1536, "M": 2048, "B": 3072, "L": 4096, "H": 5120, "g": 6144, "G": 8192, "e": 15360}[v],
+      "num_heads": {"Ti": 3, "S": 6, "M": 8, "B": 12, "L": 16, "H": 16, "g": 16, "G": 16, "e": 16}[v],
       # pylint:enable=line-too-long
       **patch
   }
@@ -314,29 +314,9 @@ def fix_old_checkpoints(params):
 
 def load(init_params, init_file, model_cfg, dont_load=()):  # pylint: disable=invalid-name because we had to CamelCase above.
   """Load init from checkpoint, both old model and this one. +Hi-res posemb."""
-
   del model_cfg
-  # Shortcut names for some canonical paper checkpoints:
-  init_file = {
-      # pylint: disable=line-too-long
-      # pylint: disable=line-too-long
-      # Recommended models from https://arxiv.org/abs/2106.10270
-      # Many more models at https://github.com/google-research/vision_transformer
-      "howto-i21k-Ti/16": "gs://vit_models/augreg/Ti_16-i21k-300ep-lr_0.001-aug_none-wd_0.03-do_0.0-sd_0.0.npz",
-      "howto-i21k-S/32": "gs://vit_models/augreg/S_32-i21k-300ep-lr_0.001-aug_none-wd_0.1-do_0.0-sd_0.0.npz",
-      "howto-i21k-S/16": "gs://vit_models/augreg/S_16-i21k-300ep-lr_0.001-aug_light1-wd_0.03-do_0.0-sd_0.0.npz",
-      "howto-i21k-B/32": "gs://vit_models/augreg/B_32-i21k-300ep-lr_0.001-aug_light1-wd_0.1-do_0.0-sd_0.0.npz",
-      "howto-i21k-B/16": "gs://vit_models/augreg/B_16-i21k-300ep-lr_0.001-aug_medium1-wd_0.1-do_0.0-sd_0.0.npz",
-      "howto-i21k-B/8": "gs://vit_models/augreg/B_8-i21k-300ep-lr_0.001-aug_medium2-wd_0.1-do_0.0-sd_0.0.npz",
-      "howto-i21k-L/16": "gs://vit_models/augreg/L_16-i21k-300ep-lr_0.001-aug_strong1-wd_0.1-do_0.0-sd_0.0.npz",
 
-      # Better plain vit-s16 baselines from https://arxiv.org/abs/2205.01580
-      "i1k-s16-90ep": "gs://big_vision/vit_s16_i1k_90ep.npz",
-      "i1k-s16-150ep": "gs://big_vision/vit_s16_i1k_150ep.npz",
-      "i1k-s16-300ep": "gs://big_vision/vit_s16_i1k_300ep.npz",
-      # pylint: disable=line-too-long
-      # pylint: enable=line-too-long
-  }.get(init_file, init_file)
+  init_file = VANITY_NAMES.get(init_file, init_file)
   restored_params = utils.load_params(None, init_file)
 
   restored_params = fix_old_checkpoints(restored_params)
@@ -351,3 +331,26 @@ def load(init_params, init_file, model_cfg, dont_load=()):  # pylint: disable=in
         new=init_params["pos_embedding"])
 
   return restored_params
+
+
+# Shortcut names for some canonical paper checkpoints:
+VANITY_NAMES = {
+    # pylint: disable=line-too-long
+    # pylint: disable=line-too-long
+    # Recommended models from https://arxiv.org/abs/2106.10270
+    # Many more models at https://github.com/google-research/vision_transformer
+    "howto-i21k-Ti/16": "gs://vit_models/augreg/Ti_16-i21k-300ep-lr_0.001-aug_none-wd_0.03-do_0.0-sd_0.0.npz",
+    "howto-i21k-S/32": "gs://vit_models/augreg/S_32-i21k-300ep-lr_0.001-aug_none-wd_0.1-do_0.0-sd_0.0.npz",
+    "howto-i21k-S/16": "gs://vit_models/augreg/S_16-i21k-300ep-lr_0.001-aug_light1-wd_0.03-do_0.0-sd_0.0.npz",
+    "howto-i21k-B/32": "gs://vit_models/augreg/B_32-i21k-300ep-lr_0.001-aug_light1-wd_0.1-do_0.0-sd_0.0.npz",
+    "howto-i21k-B/16": "gs://vit_models/augreg/B_16-i21k-300ep-lr_0.001-aug_medium1-wd_0.1-do_0.0-sd_0.0.npz",
+    "howto-i21k-B/8": "gs://vit_models/augreg/B_8-i21k-300ep-lr_0.001-aug_medium2-wd_0.1-do_0.0-sd_0.0.npz",
+    "howto-i21k-L/16": "gs://vit_models/augreg/L_16-i21k-300ep-lr_0.001-aug_strong1-wd_0.1-do_0.0-sd_0.0.npz",
+
+    # Better plain vit-s16 baselines from https://arxiv.org/abs/2205.01580
+    "i1k-s16-90ep": "gs://big_vision/vit_s16_i1k_90ep.npz",
+    "i1k-s16-150ep": "gs://big_vision/vit_s16_i1k_150ep.npz",
+    "i1k-s16-300ep": "gs://big_vision/vit_s16_i1k_300ep.npz",
+    # pylint: disable=line-too-long
+    # pylint: enable=line-too-long
+}

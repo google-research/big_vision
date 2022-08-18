@@ -62,6 +62,11 @@ def get_config(arg=None):
   arg = bvcc.parse_arg(arg, variant='B/16', runlocal=False, aug='')
   config = mlc.ConfigDict()
 
+  config.seed = 0
+  config.total_epochs = 300
+  config.num_classes = 1000
+  config.loss = 'softmax_xent'
+
   # If this gives a KeyError, lookup Fig4 of the paper and add an entry.
   # Note, this here is a good average between 30ep and 300ep, sometimes you coud
   # find a slightly better setting for either of them.
@@ -74,31 +79,31 @@ def get_config(arg=None):
       'L/16': 'medium2',
   }[arg.variant]
 
-  config.dataset = 'imagenet2012'
-  config.train_split = 'train[:99%]'
-  config.cache_raw = not arg.runlocal  # Needs up to 120GB of RAM!
-  config.shuffle_buffer_size = 250_000  # Per host, so small-ish is ok.
-  config.num_classes = 1000
-  config.loss = 'softmax_xent'
-  config.batch_size = 4096
-  config.total_epochs = 300
+  config.input = dict()
+  config.input.data = dict(
+      name='imagenet2012',
+      split='train[:99%]',
+  )
+  config.input.batch_size = 4096
+  config.input.cache_raw = not arg.runlocal  # Needs up to 120GB of RAM!
+  config.input.shuffle_buffer_size = 250_000
 
   pp_common = (
       '|value_range(-1, 1)'
       '|onehot(1000, key="{lbl}", key_result="labels")'
       '|keep("image", "labels")'
   )
-  config.pp_train = (
+  config.input.pp = (
       'decode_jpeg_and_inception_crop(224)|flip_lr|' +
       RANDAUG_DEF[aug_setting] +
       pp_common.format(lbl='label')
   )
-  pp = 'decode|resize_small(256)|central_crop(224)' + pp_common
+  pp_eval = 'decode|resize_small(256)|central_crop(224)' + pp_common
 
   # Aggressive pre-fetching because our models here are small, so we not only
   # can afford it, but we also need it for the smallest models to not be
   # bottle-necked by the input pipeline. Play around with it for -L models tho.
-  config.prefetch_to_host = 8
+  config.input.prefetch = 8
   config.prefetch_to_device = 4
 
   config.log_training_steps = 50
@@ -131,35 +136,35 @@ def get_config(arg=None):
   config.mixup = MIXUP_DEF[aug_setting]
 
   # Eval section
-  eval_common = dict(
-      type='classification',
-      dataset='imagenet2012',
-      pp_fn=pp.format(lbl='label'),
-      loss_name=config.loss,
-      log_steps=2500,  # Very fast O(seconds) so it's fine to run it often.
-  )
+  def get_eval(split, dataset='imagenet2012'):
+    return dict(
+        type='classification',
+        data=dict(name=dataset, split=split),
+        pp_fn=pp_eval.format(lbl='label'),
+        loss_name=config.loss,
+        log_steps=2500,  # Very fast O(seconds) so it's fine to run it often.
+        cache_final=not arg.runlocal,
+    )
   config.evals = {}
-  config.evals.train = {**eval_common, 'split': 'train[:2%]'}
-  config.evals.minival = {**eval_common, 'split': 'train[99%:]'}
-  config.evals.val = {**eval_common, 'split': 'validation'}
-  config.evals.v2 = {**eval_common, 'dataset': 'imagenet_v2', 'split': 'test'}
-
-  config.evals.real = {**eval_common}
-  config.evals.real.dataset = 'imagenet2012_real'
-  config.evals.real.split = 'validation'
-  config.evals.real.pp_fn = pp.format(lbl='real_label')
+  config.evals.train = get_eval('train[:2%]')
+  config.evals.minival = get_eval('train[99%:]')
+  config.evals.val = get_eval('validation')
+  config.evals.v2 = get_eval('test', dataset='imagenet_v2')
+  config.evals.real = get_eval('validation', dataset='imagenet2012_real')
+  config.evals.real.pp_fn = pp_eval.format(lbl='real_label')
 
   config.fewshot = get_fewshot_lsr(runlocal=arg.runlocal)
   config.fewshot.log_steps = 10_000
 
   # Make a few things much smaller for quick local debugging testruns.
   if arg.runlocal:
-    config.shuffle_buffer_size = 10
-    config.batch_size = 8
-    config.evals.train.split = 'train[:16]'
-    config.evals.minival.split = 'train[:16]'
-    config.evals.val.split = 'validation[:16]'
-    config.evals.real.split = 'validation[:16]'
-    config.evals.v2.split = 'test[:16]'
+    config.input.shuffle_buffer_size = 10
+    config.input.batch_size = 8
+    config.input.cache_raw = False
+    config.evals.train.data.split = 'train[:16]'
+    config.evals.minival.data.split = 'train[:16]'
+    config.evals.val.data.split = 'validation[:16]'
+    config.evals.v2.data.split = 'test[:16]'
+    config.evals.real.data.split = 'validation[:16]'
 
   return config

@@ -12,7 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Common config code for LiT models."""
+"""Snippets and constants used a lot in image-text configs."""
+
+import ml_collections
+
 
 # pylint: disable=line-too-long
 inits = {
@@ -27,3 +30,32 @@ inits = {
     'L/16': ('L/16', 'gs://vit_models/augreg/L_16-i21k-300ep-lr_0.001-aug_strong1-wd_0.1-do_0.0-sd_0.0.npz'),
 }
 # pylint: enable=line-too-long
+
+
+def get_coco(
+    *,
+    pp_img='resize(224)|value_range(-1, 1)',
+    pp_txt='tokenize(max_len=16, inkey="texts", eos="sticky", pad_value=1)',
+    prefix='z/retr/coco_',
+    log_steps):
+  """Returns config for mscoco retrieval zero-shot.
+
+  Args:
+    pp_img: Pre-processing string for "image" feature.
+    pp_txt: Pre-processing string for texts (expected to tokenize "texts" to
+      "labels").
+    prefix: Prefix to use for metrics.
+    log_steps: How often the evaluators should be run.
+
+  Returns:
+    `ConfigDict` that can be used as a retrieval evaluator configuration.
+  """
+  return ml_collections.ConfigDict({
+      'type': 'proj.image_text.retrieval',
+      'log_steps': log_steps,
+      'pp_txt': pp_txt,
+      'pp_img': pp_img,
+      'prefix': prefix,
+      'dataset': 'coco_captions',
+      'txt_name': ('captions', 'text'),
+  })

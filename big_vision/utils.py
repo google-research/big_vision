@@ -39,7 +39,7 @@ import jax.numpy as jnp
 import ml_collections as mlc
 import numpy as np
 
-import tensorflow.io.gfile as gfile
+import tensorflow.io.gfile as gfile  # pylint: disable=consider-using-from-import
 
 Registry = pp_registry.Registry
 
@@ -379,7 +379,7 @@ class Chrono:
   """
 
   def __init__(self):
-    self.program_start_time = time.time()
+    self.program_start_time = time.monotonic()
     self.train_start_time = None
     self.train_start_step = None  # When we started timing (after warmup)
 
@@ -405,7 +405,8 @@ class Chrono:
 
   def tick(self, step, measure, write_note):
     """A chronometer tick."""
-    now = time.time()
+    now = time.monotonic()
+    measure("uptime", now - self.program_start_time)
 
     # We do always count examples, regardless of the timing-related warmup that
     # happens a few lines below.
@@ -466,10 +467,10 @@ class Chrono:
   def pause(self, wait_for=()):
     assert self.pause_start is None, "Don't pause twice."
     jax.block_until_ready(wait_for)
-    self.pause_start = time.time()
+    self.pause_start = time.monotonic()
 
   def resume(self):
-    self.paused_time += time.time() - self.pause_start
+    self.paused_time += time.monotonic() - self.pause_start
     self.pause_start = None
 
   def save(self):
@@ -780,12 +781,12 @@ def steps(prefix, config, data_size=None, batch_size=None, default=ValueError):
     ValueError if there is no such duration in the config and no default is set.
   """
   # Be helpful and make sure only one of _steps, _epochs, _examples is defined.
+  # Note that steps=0 is also a valid value (e.g. to only run evaluators).
   msg = f"Only one of {prefix}_(steps,examples,epochs) should be defined."
-  assert (int(f"{prefix}_steps" in config) +
-          int(f"{prefix}_examples" in config) +
-          int(f"{prefix}_epochs" in config)) <= 1, msg
+  assert ((f"{prefix}_steps" in config) +
+          (f"{prefix}_examples" in config) +
+          (f"{prefix}_epochs" in config) <= 1), msg
 
-  # Boy do I anticipate the walrus operator...
   if f"{prefix}_steps" in config:
     return config[f"{prefix}_steps"]
 
@@ -909,12 +910,15 @@ def mixup(rng, *things, p=0.1, fold_in=None, n=2, **more_things):
   return rng, map(mix, things), {k: mix(v) for k, v in more_things.items()}
 
 
-def sync_all_hosts():
-  """Makes sure all hosts are synced."""
-  if jax.process_count() > 1:
-    x = jnp.ones([jax.local_device_count()])
-    x = jax.device_get(jax.pmap(lambda x: jax.lax.psum(x, "i"), "i")(x))
-    assert x[0] == jax.device_count()
+def _sync(x):
+  return jax.lax.psum(x, "i")
+
+
+def sync():
+  """Syncs hosts and empties async computation queue."""
+  x = jnp.ones([jax.local_device_count()])
+  x = jax.device_get(jax.pmap(_sync, "i")(x))
+  assert x[0] == jax.device_count()
 
 
 def check_and_compile_patterns(patterns):
@@ -968,6 +972,20 @@ def profile(name, ttl=3 * 365 * 24 * 3600):
   sess = startstop_prof_at_steps(None, name=name, ttl=ttl)
   yield
   startstop_prof_at_steps(sess, name=name, ttl=ttl)
+
+
+@contextlib.contextmanager
+def log_timing(mw, name, *, noop=False):
+  t0 = time.monotonic()
+  yield
+  dt = time.monotonic() - t0
+  if not noop:
+    mw.measure(name, dt)
+
+
+@jax.jit
+def _squareit(x):
+  return x**2
 
 
 def startstop_prof(sess, step=None, first_step=0,

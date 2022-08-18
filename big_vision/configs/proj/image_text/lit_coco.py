@@ -44,8 +44,7 @@ big_vision.tools.eval_only \
 """
 
 import big_vision.configs.common as bvcc
-from big_vision.configs.proj.image_text import common as cl
-from big_vision.configs.proj.image_text import common_retrieval
+from big_vision.configs.proj.image_text import common
 from ml_collections import ConfigDict
 
 
@@ -54,38 +53,36 @@ def get_config(arg=None):
   arg = bvcc.parse_arg(
       arg, res=224, runlocal=False, token_len=16, txt='bert_base', img='B/16',
       init='', img_head=False)
-  img_name, img_init = cl.inits[arg.img]
-  txt_name, txt_init = cl.inits[arg.txt]
+  img_name, img_init = common.inits[arg.img]
+  txt_name, txt_init = common.inits[arg.txt]
   config = ConfigDict()
 
-  config.batch_size = 4096*1 if not arg.runlocal else 32
-  # TODO update config to use YFCC100M, CC12M from tfds
-  config.dataset = 'coco_captions'
-  config.train_split = 'train'
+  config.input = {}
+  config.input.data = dict(name='coco_captions', split='train')
+  config.input.batch_size = 4096 if not arg.runlocal else 32
+  config.input.shuffle_buffer_size = 250_000  if not arg.runlocal else 50
+
   config.total_steps = 5_000 if not arg.runlocal else 1
 
   config.init_shapes = [(1, arg.res, arg.res, 3), (1, arg.token_len,)]
   config.init_types = ['float32', 'int32']
 
   if arg.init:
-    vocab_path = '.'.join(arg.init.split('.')[:-1]) + '.txt'
+    vocab_path = arg.init.rsplit('.', 1)[0] + '.txt'
   else:
     vocab_path = f'{txt_init}/vocab.txt'
   tokenizer = lambda inkey: (
       f'bert_tokenize(inkey="{inkey}", max_len={arg.token_len}, '
       f'vocab_path="{vocab_path}")')
-  config.pp_train = pp_eval = (
+  config.input.pp = pp_eval = (
       f'decode|resize({arg.res})|flip_lr|randaug(2,10)|value_range(-1,1)'
       f'|flatten|{tokenizer("captions/text")}|keep("image", "labels")'
   )
   config.pp_modules = [
       'ops_general', 'ops_image', 'ops_text', 'proj.flaxformer.bert_ops']
-  config.pp_img = f'resize({arg.res})|value_range(-1,1)|keep("image")'
-  config.pp_txt = tokenizer('label') + '|keep("labels")'
 
-  config.shuffle_buffer_size = 250_000  if not arg.runlocal else 50
   config.log_training_steps = 50
-  config.checkpoint_steps = 1000
+  config.ckpt_steps = 1000
 
   # Model section
   config.model_name = 'proj.image_text.two_towers'
@@ -117,15 +114,12 @@ def get_config(arg=None):
     config.optax_name = 'scale_by_adam'
   else:
     config.optax_name = 'big_vision.scale_by_adafactor'
-  # Gather representations across TPU cores for larger batch size for loss.
-  # Generally helps: ((internal link)
-  config.loss_use_global_batch = True
 
   config.lr = 0.001
   config.wd = 0.01
   warmup_steps = max(int(0.03 * config.total_steps), 100)
   config.schedule = [
-      ('img/.*', None),
+      ('img/.*', None),  # Freezes image tower.
       ('.*', dict(decay_type='cosine', warmup_steps=warmup_steps)),
   ]
 
@@ -138,28 +132,25 @@ def get_config(arg=None):
   eval_common = dict(
       type='proj.image_text.contrastive',
       use_global_batch=config.loss_use_global_batch,
-      log_steps=500,
+      log_steps=500 if not arg.runlocal else 5,
   )
   config.evals = {}
   sub = '[:4]' if arg.runlocal else ''
   config.evals.val = {
       **eval_common,
-      'split': f'val{sub}',
-      'dataset': config.dataset,
+      'data': dict(name=config.input.data.name, split=f'val{sub}'),
       'pp_fn': pp_eval,
   }
   config.evals.coco = {
       **eval_common,
-      'dataset': 'coco_captions',
-      'split': f'val{sub}',
+      'data': dict(name='coco_captions', split=f'val{sub}'),
       'pp_fn': (
           f'decode|resize({arg.res})|value_range(-1,1)'
           f'|flatten|{tokenizer("captions/text")}|keep("image", "labels")'),
   }
   config.evals.imagenet = {
       **eval_common,
-      'dataset': 'imagenet2012',
-      'split': f'validation{sub}',
+      'data': dict(name='imagenet2012', split=f'validation{sub}'),
       'pp_fn': (
           f'decode|resize({arg.res})|value_range(-1,1)'
           '|clip_i1k_label_names'
@@ -172,7 +163,7 @@ def get_config(arg=None):
   config.evals.disclf.type = 'proj.image_text.discriminative_classifier'
   config.evals.disclf.prefix = 'z/0shot/'
   config.evals.disclf.log_steps = eval_common['log_steps']
-  config.evals.retrieval_coco = common_retrieval.get_coco(
+  config.evals.retrieval_coco = common.get_coco(
       pp_img=f'resize({arg.res})|value_range(-1, 1)',
       pp_txt=tokenizer('texts'),
       log_steps=config.evals.disclf.log_steps,

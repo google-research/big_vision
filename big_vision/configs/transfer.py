@@ -51,6 +51,10 @@ def _set_model(config, model):
     config.model_init = 'i1k-s16-300ep'
     config.model = dict(variant='S/16', pool_type='gap', posemb='sincos2d',
                         rep_size=True)
+  elif model == 'bit-m-r50x1':
+    config.model_name = 'bit_paper'
+    config.model_init = 'M'
+    config.model = dict(depth=50, width=1)
   else:
     raise ValueError(f'Unknown model: {model}, please define customized model.')
 
@@ -82,8 +86,7 @@ def _set_task(config, dataset, train, val, test, n_cls,
       decay_type='cosine',
   )
 
-  config.dataset = dataset
-  config.train_split = train
+  config.input.data = dict(name=dataset, split=train)
   pp_common = (
       '|value_range(-1, 1)|'
       f'onehot({n_cls}, key="{lbl}", key_result="labels")|'
@@ -101,21 +104,20 @@ def _set_task(config, dataset, train, val, test, n_cls,
                      'inception_crop, resmall_crop, resize_crop')
   if flip:
     pp_train += '|flip_lr'
-  config.pp_train = pp_train + pp_common
+  config.input.pp = pp_train + pp_common
 
   pp = f'decode|resize_small({h_res})|central_crop({l_res})' + pp_common
   config.num_classes = n_cls
 
-  eval_common = dict(
-      type='classification',
-      dataset=dataset,
-      loss_name='softmax_xent',
-      log_steps=100,
-      pp_fn=pp,
-  )
-  config.evals = {}
-  config.evals.val = dict(**eval_common, split=val)
-  config.evals.test = dict(**eval_common, split=test)
+  def get_eval(split):
+    return dict(
+        type='classification',
+        data=dict(name=dataset, split=split),
+        loss_name='softmax_xent',
+        log_steps=100,
+        pp_fn=pp,
+    )
+  config.evals = dict(val=get_eval(val), test=get_eval(test))
 
 
 def _set_imagenet_variants(config, h_res=448, l_res=384):
@@ -131,15 +133,13 @@ def _set_imagenet_variants(config, h_res=448, l_res=384):
   # NOTE: keep test == val for convenience in subsequent analysis.
 
   config.evals.real = dict(type='classification')
-  config.evals.real.dataset = 'imagenet2012_real'
-  config.evals.real.split = 'validation'
+  config.evals.real.data = dict(name='imagenet2012_real', split='validation')
   config.evals.real.pp_fn = pp.format(lbl='real_label')
   config.evals.real.loss_name = config.loss
   config.evals.real.log_steps = 100
 
   config.evals.v2 = dict(type='classification')
-  config.evals.v2.dataset = 'imagenet_v2'
-  config.evals.v2.split = 'test'
+  config.evals.v2.data = dict(name='imagenet_v2', split='test')
   config.evals.v2.pp_fn = pp.format(lbl='label')
   config.evals.v2.loss_name = config.loss
   config.evals.v2.log_steps = 100
@@ -151,8 +151,9 @@ def get_config(arg=None):
                        h_res=448, l_res=384, runlocal=False)
   config = mlc.ConfigDict()
 
-  config.batch_size = 512 if not arg.runlocal else 8
-  config.shuffle_buffer_size = 50_000 if not arg.runlocal else 100
+  config.input = {}
+  config.input.batch_size = 512 if not arg.runlocal else 8
+  config.input.shuffle_buffer_size = 50_000 if not arg.runlocal else 100
 
   config.log_training_steps = 10
   config.ckpt_steps = 1000
