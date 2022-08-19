@@ -96,8 +96,6 @@ def get_config(arg=None):
       rho_max=0.6,
       rho_min=0.1,
       alpha=0.6,
-      adaptive_perturbation=False,
-      minimize_fp=True,
       lr_max=config.get_ref('lr'),
       lr_min=config.schedule.get_ref('linear_end') * config.get_ref('lr'),
   )

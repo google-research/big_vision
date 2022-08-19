@@ -33,11 +33,18 @@ def gsam_gradient(loss_fn, params, inputs, targets,
     adaptive_perturbation: if False, same perturbation as SAM,
         treat all parameters as a single vector,
         perturbation norm is calculated as the norm of the whole vector;
-        if True, for each parameter tensor p,
-        perturbation is element-wise multiplied by abs(p).
+        If True, perturbation norm is proportional to parameter norm,
+        this stabilizes training when different layers have weights
+        of different scales.
+        Emprically, setting it to True can handle 10x larger rho than
+        setting it to False.
     minimize_fp: if True, min(f_p, h), original GSAM;
         if False, min(f, h), where f is the clean loss.
         f_p is the perturbed loss, h is the surrogate gap.
+        If True, training dynamics is closer to SAM than conventional training,
+        you might observe several loss spikes during training.
+        If False, the training dynamics is closer to conventional training,
+        and is often more stable (fewer loss spikes) during training.
   Returns:
     l_clean: the loss function value.
     g_gsam: the GSAM gradient. g_gsam is not averaged across workers,

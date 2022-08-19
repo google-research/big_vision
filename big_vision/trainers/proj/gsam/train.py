@@ -205,9 +205,9 @@ def main(argv):
       return getattr(u, config.get("loss", "sigmoid_xent"))(
           logits=logits, labels=labels)
 
-    learning_rate = sched_fns[0](step) * config["lr"]
+    learning_rate = sched_fns[0](step) * config.lr
     l, grads = gsam_gradient(loss_fn=loss_fn, params=params, inputs=images,
-        targets=labels, lr=learning_rate, **config["gsam"])
+        targets=labels, lr=learning_rate, **config.gsam)
     l, grads = jax.lax.pmean((l, grads), axis_name="batch")
     updates, opt = tx.update(grads, opt, params)
     params = optax.apply_updates(params, updates)
