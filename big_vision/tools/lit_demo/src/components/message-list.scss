@@ -1,0 +1,26 @@
+@import '../style/colors';
+
+.message {
+  padding: 0.1rem 0.5rem;
+  margin-bottom: 1rem;
+}
+
+.warning {
+  background: var(--warn-bg);
+  color: var(--warn-fg);
+}
+
+.error {
+  background: var(--error-bg);
+  color: var(--error-fg);
+}
+
+.info {
+  background: var(--note-bg);
+  color: var(--note-fg);
+}
+
+.close {
+  float: right;
+  cursor: pointer;
+}

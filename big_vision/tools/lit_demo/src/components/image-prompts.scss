@@ -1,0 +1,124 @@
+@import '../style/mixins';
+
+.image-prompt {
+  display: flex;
+  gap: 1.5em;
+  align-items: flex-start;
+  margin-top: 2rem;
+
+  @include phone-portrait {
+    align-items: center;
+    flex-direction: column;
+    gap: 0;
+    margin-bottom: 5rem;
+  }
+
+  .left {
+    display: flex;
+    flex-direction: column;
+
+    .wrapper {
+      position: relative;
+
+      .src {
+        position: absolute;
+        right: 2rem;
+        bottom: 2rem;
+        color: white;
+        font-size: 1.5rem;
+        text-shadow: 2px 2px black;
+        text-decoration: none;
+      }
+    }
+
+    .animation {
+      position: relative;
+      width: 224px;
+      height: 15px;
+      opacity: 0;
+
+      .computing {
+        text-align: center;
+      }
+    }
+  }
+
+  .right {
+    display: flex;
+    flex-grow: 1;
+    flex-direction: column;
+    gap: 0.5em;
+
+    .top {
+      text-align: right;
+      height: 30px;
+    }
+
+    .buttons {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+      gap: 1em;
+      align-items: center;
+    }
+
+    .item {
+      position: relative;
+      display: flex;
+
+      .pct {
+        display: inline-block;
+        margin-right: 1em;
+        width: 3.5em;
+        text-align: right;
+        opacity: 0;
+        transition: opacity 0.5s;
+      }
+
+      input {
+        flex-grow: 1;
+        max-width: 70vw;
+        border-radius: 0;
+        background: transparent;
+        border: 0;
+        border-bottom: 1px solid var(--text-fg);
+        color: var(--text-fg);
+        outline: none;
+
+        &.toolong {
+          border-bottom: 1px solid var(--text-red);
+          color: var(--text-red);
+        }
+      }
+
+      .bar {
+        position: absolute;
+        display: inline-block;
+        top: 5%;
+        left: 0;
+        z-index: -1;
+        background: var(--bar-col);
+        height: 90%;
+        width: 0;
+        transition: width 0.5s;
+      }
+    }
+
+    .bottom {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+      gap: 1em;
+      align-items: center;
+      opacity: 0;
+
+      .tweet {
+        background: rgb(18, 150, 223);
+        color: white;
+        text-decoration: none;
+        padding: 0px 15px;
+        border-radius: 16px;
+      }
+    }
+  }
+}
