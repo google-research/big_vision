@@ -1,0 +1,35 @@
+// Dark and light mode colors.
+
+:root {
+  --text-bg: hsl(0, 0%, 97%);
+  --gray-border: hsla(0, 0%, 0%, 0.1);
+  --gray: rgba(0, 0, 0, 0.6);
+  --border-radius: 5px;
+  --orange: hsl(24, 100%, 50%);
+  --distill-blue: hsl(200, 50%, 25%);
+  --blue: #337699;
+  --green: #3db867;
+  --text-fg: rgb(15, 15, 15);
+  --text-red: rgb(220, 0, 0);
+  --bar-col: rgb(171, 199, 227);
+  --link-col: rgb(0, 0, 238);
+  --placeholder-col: rgb(166, 166, 166);
+  --note-bg: #e1f5fe;
+  --note-fg: #1a6ebb;
+  --warn-bg: #ffe1aa;
+  --warn-fg: #a16800;
+  --error-bg: #850000;
+  --error-fg: white;
+
+  @media (prefers-color-scheme: dark) {
+    --text-bg: rgb(56, 56, 56);
+    --text-fg: rgb(213, 213, 213);
+    --bar-col: rgb(20, 109, 163);
+    --link-col: rgb(66, 165, 245);
+
+    --note-fg: rgb(121 157 190);
+    --note-bg: rgb(2 59 85);
+    --warn-bg: #784e00;
+    --warn-fg: #edbe68;
+  }
+}

@@ -1,0 +1,80 @@
+// General styles for the page.
+
+@import './style/colors';
+@import './style/mixins';
+
+html {
+  font-size: 14px;
+  line-height: 1.6em;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen,
+    Ubuntu, Cantarell, 'Fira Sans', 'Droid Sans', 'Helvetica Neue', Arial,
+    sans-serif;
+  text-size-adjust: 100%;
+  -ms-text-size-adjust: 100%;
+  -webkit-text-size-adjust: 100%;
+
+  @media (min-width: 1200px) {
+    width: 1024px;
+    margin: 0 auto;
+  }
+  @media (min-width: 768px) {
+    font-size: 16px;
+  }
+
+  color: var(--text-fg);
+  background: var(--text-bg);
+
+  body {
+    margin: 0;
+    padding: 0rem 1rem 10rem;
+  }
+}
+
+a,
+a:visited {
+  color: var(--link-col);
+}
+
+h1 {
+  font-weight: 700;
+  font-size: 2rem;
+  line-height: 1.3em;
+}
+
+p {
+  font-size: 1.06rem;
+  line-height: 1.3em;
+}
+
+input {
+  font-size: 1rem;
+
+  &::placeholder {
+    color: var(--placeholder-col);
+  }
+}
+
+.note {
+  font-style: normal;
+  border: none;
+  border-radius: 2px;
+  margin-left: auto;
+  margin-right: auto;
+
+  padding: 0.5rem 0.5rem 0.5rem 2rem;
+  width: 90%;
+
+  @include phone-portrait {
+    width: 100%;
+    padding: 0.5rem;
+    box-sizing: border-box;
+  }
+
+  background-color: var(--note-bg);
+  color: var(--note-fg);
+
+  &.warning {
+    background-color: var(--warn-bg);
+    color: var(--warn-fg);
+  }
+}

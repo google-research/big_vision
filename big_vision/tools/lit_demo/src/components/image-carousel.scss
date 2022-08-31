@@ -1,0 +1,32 @@
+@import '../style/mixins';
+
+.selector {
+  overflow: scroll;
+  padding-bottom: 10px; // OS X scroll bar
+
+  .inner {
+    white-space: nowrap;
+
+    .thumb {
+      display: inline-block;
+
+      img {
+        cursor: pointer;
+
+        width: 20vmin;
+        height: 20vmin;
+        max-width: 200px;
+        max-height: 200px;
+
+        @include phone-portrait {
+          width: 33vmin;
+          height: 33vmin;
+        }
+
+        margin: 10px;
+
+        box-shadow: 0 0 10px #888;
+      }
+    }
+  }
+}

@@ -1,0 +1,75 @@
+<!doctype html>
+
+<script src="exports_bin.js"></script>
+
+<p>
+  A simple demonstration how to use LiT models in a JS application using global exports.
+  See source code of this file for API usage.
+</p>
+
+<pre id="output"></pre>
+<input type="text"> <input type="text"> <input type="text"> <input type="text"> <input type="text">
+<button id="compute">compute</button>
+
+<div id="imgs"></div>
+
+<script>
+
+const output = document.querySelector('#output');
+const prompts = [...document.querySelectorAll('input')];
+const compute = document.querySelector('#compute');
+let imgId = null;
+
+async function demo() {
+  // Optionally pointing to different models/images. That URL should contain
+  // files like baseUrl/data/models/<name>/tfjs/model.json and
+  // baseUrl/data/images/info.json
+  lit.setBaseUrl('https://google-research.github.io/vision_transformer/lit');
+
+  // Load image data.
+  output.textContent = 'loading... ';
+  const data = new lit.ImageData();
+  await data.load();
+
+  // Show all images.
+  const imgs = document.querySelector('#imgs');
+  data.rows.forEach((row, idx) => {
+    const img = document.createElement('img');
+    img.src = lit.getImageUrl(row.id);
+    imgs.append(img);
+    img.addEventListener('click', () => {
+      // Select image for similarity computation.
+      [...document.querySelectorAll('#imgs img')].map(e => e.className = '');
+      img.className = 'selected';
+      imgId = row.id;
+    })
+  })
+
+  // Load model (refers to baseUrl/data/models subdirectory).
+  const model = new lit.Model('tiny');
+  await model.load(progress => output.textContent = 'loading... ' + Math.round(100*progress) + '%');
+  output.textContent = 'ready!';
+
+  compute.addEventListener('click', () => {
+    // Compute model probabilities.
+    const texts = prompts.map(e => e.value);
+    const imgIdx = model.zimgIds.indexOf(imgId);
+    const probs = model.computeProbabilities(texts, imgIdx);
+    output.innerText = 'probs = ' + probs;
+  })
+}
+
+demo();
+
+</script>
+
+<style>
+#imgs { margin-top: 2rem; }
+#imgs img {
+  width: 64px;
+  height: 64px;
+  opacity: 0.5;
+  cursor: pointer;
+}
+#imgs img.selected { opacity: 1.0; }
+</style>
