@@ -119,13 +119,21 @@ def onehot(labels, num_classes, on_value=1.0, off_value=0.0):
 
 
 def npload(fname):
-  # Use local paths directly if possible:
+  """Loads `fname` and returns an np.ndarray or dict thereof."""
+  # Load the data; use local paths directly if possible:
   if os.path.exists(fname):
-    return dict(np.load(fname, allow_pickle=False))
-  # For other paths go via gfile+BytesIO since np.load requires seeks.
-  with gfile.GFile(fname, "rb") as f:
-    data = f.read()
-  return dict(np.load(io.BytesIO(data), allow_pickle=False))
+    loaded = np.load(fname, allow_pickle=False)
+  else:
+    # For other (remote) paths go via gfile+BytesIO as np.load requires seeks.
+    with gfile.GFile(fname, "rb") as f:
+      data = f.read()
+    loaded = np.load(io.BytesIO(data), allow_pickle=False)
+
+  # Support loading both single-array files (np.save) and zips (np.savez).
+  if isinstance(loaded, np.ndarray):
+    return loaded
+  else:
+    return dict(loaded)
 
 
 def load_checkpoint(tree, npz):
@@ -379,6 +387,10 @@ class Chrono:
   """
 
   def __init__(self):
+    self._timing_history = collections.defaultdict(list)
+    self._measure = None
+    self._write_note = None
+
     self.program_start_time = time.monotonic()
     self.train_start_time = None
     self.train_start_step = None  # When we started timing (after warmup)
@@ -389,24 +401,40 @@ class Chrono:
     self.pause_start = None
     self.paused_time = 0
 
+    self.total_steps = None
+    self.global_bs = None
+    self.steps_per_epoch = None
+
     self.warmup = 2  # How many calls to `tick` to skip.
     self.load()  # Inits accum integrators.
     self.note = "Chrono n/a"
 
-  def inform(self, first_step, total_steps, global_bs, steps_per_epoch):
+  def inform(self, *, first_step=None, total_steps=None, global_bs=None,
+             steps_per_epoch=None, measure=None, write_note=None):
     """Provide some extra info that's only known later in the program."""
-    self.prev_step = first_step
-    self.first_step = first_step
-    self.total_steps = total_steps
-    self.steps_per_epoch = steps_per_epoch
-    self.global_bs = global_bs
-    if total_steps:
-      self.note = f"Steps:{first_step}/{total_steps} [{first_step/total_steps:.1%}]"
+    # The pattern of `self.x = x or self.x` allows one to call `inform` various
+    # times with various subset of information (args), as they become available.
+    # Except for `first_step` which can be 0 so is a bit more verbose.
+    self.prev_step = first_step if first_step is not None else self.prev_step
+    self.total_steps = total_steps or self.total_steps
+    self.steps_per_epoch = steps_per_epoch or self.steps_per_epoch
+    self.global_bs = global_bs or self.global_bs
+    self._measure = measure or self._measure
+    self._write_note = write_note or self._write_note
+    if self.total_steps and self.prev_step is not None:
+      self.note = (f"Steps:{self.prev_step}/{self.total_steps} "
+                   f"[{self.prev_step/self.total_steps:.1%}]")
 
-  def tick(self, step, measure, write_note):
+  def tick(self, step, measure=None, write_note=None):
     """A chronometer tick."""
+    if step == self.prev_step: return  # Can happen from evals for example.
+
+    measure = measure or self._measure
+    write_note = write_note or self._write_note
+
     now = time.monotonic()
     measure("uptime", now - self.program_start_time)
+    self.flush_timings()
 
     # We do always count examples, regardless of the timing-related warmup that
     # happens a few lines below.
@@ -414,7 +442,9 @@ class Chrono:
     self.prev_step = step
     self.accum_examples_seen += ds * self.global_bs
     measure("examples_seen", self.accum_examples_seen)
-    measure("epoch", step / self.steps_per_epoch)
+    measure("progress", step / self.total_steps)
+    if self.steps_per_epoch:
+      measure("epoch", step / self.steps_per_epoch)
 
     # We take the start as the second time `tick` is called, so we avoid
     # measuring the overhead of compilation and don't include it in time
@@ -486,6 +516,38 @@ class Chrono:
     self.accum_train_time = ckpt.get("accum_train_time", 0.0)
     self.accum_pause_time = ckpt.get("accum_pause_time", 0.0)
     self.accum_examples_seen = ckpt.get("accum_examples_seen", 0)
+
+  @contextlib.contextmanager
+  def log_timing(self, name, *, noop=False):
+    """Use this when you time sth once per step and want instant flushing."""
+    t0 = time.monotonic()
+    yield
+    dt = time.monotonic() - t0
+    if not noop:
+      self._measure(name, dt)
+      logging.info("TIMING[%s]: %s", name, dt)
+      logging.flush()
+
+  @contextlib.contextmanager
+  def log_timing_avg(self, name, *, noop=False):
+    """Use this when you time sth multiple times per step (eg in a loop)."""
+    t0 = time.monotonic()
+    yield
+    dt = time.monotonic() - t0
+    if not noop:
+      self._timing_history[name].append(dt)
+      logging.info("TIMING[%s]: avg %s current %s",
+                   name, np.mean(self._timing_history[name]), dt)
+      logging.flush()
+
+  def flush_timings(self):
+    for name, times in self._timing_history.items():
+      self._measure(name, np.mean(times))
+    self._timing_history.clear()
+
+
+# Singleton to use from everywhere. https://stackoverflow.com/a/6760726/2366315
+chrono = Chrono()
 
 
 def _traverse_with_names(tree, with_inner_nodes=False):
@@ -756,13 +818,16 @@ def recover_tree(keys, values):
   return tree
 
 
-def steps(prefix, config, data_size=None, batch_size=None, default=ValueError):
+def steps(prefix, config, data_size=None, batch_size=None, total_steps=None,
+          default=ValueError):
   """Gets duration named `prefix` out of `config` and converts it to steps.
 
   Using this function to access a configuration value that denotes some kind
   of duration (eg training time, warmup, checkpoint frequency, ...) allows the
-  duration to be specified in terms of steps, epochs, or examples, and converts
-  any of these into steps, such that the training code only deals with steps.
+  duration to be specified in terms of steps, epochs, examples, or percent of
+  training time, and converts any of these into steps, such that the training
+  code only deals with steps.
+  If the result is not an integer step number, it is rounded to the nearest one.
 
   Args:
     prefix: The name of the duration to query. The actual config fields can
@@ -770,6 +835,7 @@ def steps(prefix, config, data_size=None, batch_size=None, default=ValueError):
     config: The dictionary (config) from which to read the duration.
     data_size: The total number of training examples in one epoch.
     batch_size: The number of examples processed per step.
+    total_steps: The total number of training steps to run.
     default: The default value to return when no duration of the name `prefix`
       is found in the `config`. Set to `ValueError` (the default) to raise an
       error instead of returning a default value.
@@ -780,28 +846,33 @@ def steps(prefix, config, data_size=None, batch_size=None, default=ValueError):
   Raises:
     ValueError if there is no such duration in the config and no default is set.
   """
-  # Be helpful and make sure only one of _steps, _epochs, _examples is defined.
+  # Be helpful and make sure only match one of the following suffixes.
+  suffixes = {"steps", "examples", "epochs", "percent"}
+  matches = {f"{prefix}_{s}" for s in suffixes if f"{prefix}_{s}" in config}
   # Note that steps=0 is also a valid value (e.g. to only run evaluators).
-  msg = f"Only one of {prefix}_(steps,examples,epochs) should be defined."
-  assert ((f"{prefix}_steps" in config) +
-          (f"{prefix}_examples" in config) +
-          (f"{prefix}_epochs" in config) <= 1), msg
+  assert len(matches) <= 1, f"Only one of '{matches}' should be defined."
 
   if f"{prefix}_steps" in config:
     return config[f"{prefix}_steps"]
 
   if batch_size and f"{prefix}_examples" in config:
-    return config[f"{prefix}_examples"] // batch_size
+    return max(round(config[f"{prefix}_examples"] / batch_size), 1)
 
   if batch_size and data_size and f"{prefix}_epochs" in config:
     steps_per_epoch = data_size / batch_size
-    return int(config[f"{prefix}_epochs"] * steps_per_epoch)
+    return max(round(config[f"{prefix}_epochs"] * steps_per_epoch), 1)
+
+  if total_steps and f"{prefix}_percent" in config:
+    pct = config[f"{prefix}_percent"]
+    assert 0.0 <= pct <= 1.0, (  # Be helpful, since it's not obvious.
+        f"Percents should lie in [0.0, 1.0], but {prefix}_percent is {pct}")
+    return max(round(pct * total_steps), 1)
 
   if default is ValueError:
     raise ValueError(
         f"Cannot convert {prefix} to steps, due to missing batch_size "
-        f"({batch_size}), data_size ({data_size}), or corresponding entry in "
-        "config:\n" + "\n".join(config.keys()))
+        f"({batch_size}), data_size ({data_size}), total_steps ({total_steps})"
+        ", or corresponding entry in config:\n" + "\n".join(config.keys()))
 
   return default
 
@@ -827,8 +898,10 @@ def create_learning_rate_schedule(
     A function learning_rate(step): float -> {"learning_rate": float}.
   """
 
-  warmup_steps = steps("warmup", kw, data_size, batch_size, default=0)
-  cooldown_steps = steps("cooldown", kw, data_size, batch_size, default=0)
+  warmup_steps = steps(
+      "warmup", kw, data_size, batch_size, total_steps, default=0)
+  cooldown_steps = steps(
+      "cooldown", kw, data_size, batch_size, total_steps, default=0)
 
   # Early catch hard to backtrack errors due to warmup_steps >= total_steps,
   # but let it run for 0 and 1 steps used to eval and debug runs.
@@ -968,24 +1041,12 @@ def make_mask_trees(tree, patterns, *, log=None):
 
 
 @contextlib.contextmanager
-def profile(name, ttl=3 * 365 * 24 * 3600):
-  sess = startstop_prof_at_steps(None, name=name, ttl=ttl)
-  yield
-  startstop_prof_at_steps(sess, name=name, ttl=ttl)
-
-
-@contextlib.contextmanager
-def log_timing(mw, name, *, noop=False):
-  t0 = time.monotonic()
-  yield
-  dt = time.monotonic() - t0
+def profile(name, ttl=3 * 365 * 24 * 3600, noop=False):
   if not noop:
-    mw.measure(name, dt)
-
-
-@jax.jit
-def _squareit(x):
-  return x**2
+    sess = startstop_prof_at_steps(None, name=name, ttl=ttl)
+  yield
+  if not noop:
+    startstop_prof_at_steps(sess, name=name, ttl=ttl)
 
 
 def startstop_prof(sess, step=None, first_step=0,

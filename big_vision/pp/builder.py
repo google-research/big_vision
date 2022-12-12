@@ -12,41 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Image preprocessing library."""
-
-from __future__ import absolute_import
-from __future__ import division
-from __future__ import print_function
+"""Preprocessing builder."""
 
 from absl import logging
 from big_vision.pp.registry import Registry
-import tensorflow.compat.v1 as tf
-
-TPU_SUPPORTED_DTYPES = [
-    tf.bool, tf.int32, tf.int64, tf.bfloat16, tf.float32, tf.complex64,
-    tf.uint8, tf.uint32
-]
 
 
-def _remove_tpu_dtypes(data):
-  """Recursively removes values with dtype not in TPU_SUPPORTED_DTYPES."""
-
-  def permitted(k, v):
-    if v.dtype in TPU_SUPPORTED_DTYPES:
-      return True
-    tf.logging.warning(
-        "Removing key '%s' from data dict because its dtype %s is not in the "
-        "supported dtypes: %s", k, v.dtype, TPU_SUPPORTED_DTYPES)
-    return False
-
-  return {
-      k: _remove_tpu_dtypes(v) if isinstance(v, dict) else v
-      for k, v in data.items()
-      if isinstance(v, dict) or permitted(k, v)
-  }
-
-
-def get_preprocess_fn(pp_pipeline, remove_tpu_dtypes=True, log_data=True):
+def get_preprocess_fn(pp_pipeline, log_data=True):
   """Transform an input string into the preprocessing function.
 
   The minilanguage is as follows:
@@ -63,9 +35,7 @@ def get_preprocess_fn(pp_pipeline, remove_tpu_dtypes=True, log_data=True):
 
   Args:
     pp_pipeline: A string describing the pre-processing pipeline. If empty or
-      None, no preprocessing will be executed, but removing unsupported TPU
-      dtypes will still be called if `remove_tpu_dtypes` is True.
-    remove_tpu_dtypes: Whether to remove TPU incompatible types of data.
+      None, no preprocessing will be executed.
     log_data: Whether to log the data before and after preprocessing. Note:
       Remember set to `False` in eager mode to avoid too many log messages.
 
@@ -99,9 +69,6 @@ def get_preprocess_fn(pp_pipeline, remove_tpu_dtypes=True, log_data=True):
       raise ValueError("Argument `data` must be a dictionary, "
                        "not %s" % str(type(data)))
 
-    if remove_tpu_dtypes:
-      # Remove data that are TPU-incompatible (e.g. filename of type tf.string).
-      data = _remove_tpu_dtypes(data)
     if log_data:
       logging.info("Data after pre-processing:\n%s", data)
     return data

@@ -85,7 +85,7 @@ class ResNetStage(nn.Module):
 
 class Model(nn.Module):
   """ResNetV1."""
-  num_classes: int
+  num_classes: Optional[int] = None
   width: float = 1
   depth: Union[int, Sequence[int]] = 50
 

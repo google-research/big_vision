@@ -57,7 +57,7 @@ class MixerBlock(nn.Module):
 class MlpMixer(nn.Module):
   """Mixer architecture."""
   patch_size: Tuple[int, int]
-  num_classes: int
+  num_classes: Optional[int]
   num_blocks: int
   hidden_dim: int
   tokens_mlp_dim: int
@@ -83,7 +83,7 @@ class MlpMixer(nn.Module):
     return x, out
 
 
-def Model(num_classes, *, variant=None, **kw):  # pylint: disable=invalid-name
+def Model(num_classes=None, *, variant=None, **kw):  # pylint: disable=invalid-name
   """Factory function to easily create a Model variant like "L/16"."""
 
   if variant is not None:

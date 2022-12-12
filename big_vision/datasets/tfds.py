@@ -17,6 +17,7 @@ import functools
 
 import big_vision.datasets.core as ds_core
 import jax
+import overrides
 import tensorflow_datasets as tfds
 
 
@@ -35,6 +36,7 @@ class DataSource(ds_core.DataSource):
         if f in self.builder.info.features
     }
 
+  @overrides.overrides
   def get_tfdata(self, ordered=False):
     return self.builder.as_dataset(
         split=self.process_split,
@@ -47,9 +49,11 @@ class DataSource(ds_core.DataSource):
         decoders=self.skip_decoders)
 
   @property
+  @overrides.overrides
   def total_examples(self):
     return self.builder.info.splits[self.split].num_examples
 
+  @overrides.overrides
   def num_examples_per_process(self, nprocess=None):
     splits = tfds.even_splits(self.split, nprocess or jax.process_count())
     return [self.builder.info.splits[s].num_examples for s in splits]

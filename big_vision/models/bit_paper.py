@@ -128,7 +128,7 @@ class ResNetStage(nn.Module):
 
 class Model(nn.Module):
   """ResNetV2."""
-  num_classes: int
+  num_classes: Optional[int] = None
   width: int = 1
   depth: Union[int, Sequence[int]] = 50  # 5/101/152, or list of block depths.
 

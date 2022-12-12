@@ -31,7 +31,7 @@ import jax
 import jax.config
 import jax.numpy as jnp
 from ml_collections import config_flags
-import tensorflow.io.gfile as gfile
+from tensorflow.io import gfile
 
 
 config_flags.DEFINE_config_file(
@@ -64,6 +64,7 @@ def main(argv):
       logging.info("NOTE: %s", note)
 
   mw = u.BigVisionMetricWriter(xid, wid, workdir, config)
+  u.chrono.inform(measure=mw.measure, write_note=write_note)
 
   write_note(f"Initializing {config.model_name} model...")
   assert config.get("model.reinit") is None, (
@@ -82,22 +83,24 @@ def main(argv):
     input_shapes = config.get("init_shapes", [(1, 224, 224, 3)])
     input_types = config.get("init_types", [jnp.float32] * len(input_shapes))
     dummy_inputs = [jnp.zeros(s, t) for s, t in zip(input_shapes, input_types)]
-    return flax.core.unfreeze(model.init(rng, *dummy_inputs))["params"]
+    things = flax.core.unfreeze(model.init(rng, *dummy_inputs))
+    return things.get("params", {})
 
-  with u.log_timing(mw, "z/secs/init"):
+  with u.chrono.log_timing("z/secs/init"):
     params_cpu = init(jax.random.PRNGKey(42))
   if jax.process_index() == 0:
     parameter_overview.log_parameter_overview(params_cpu, msg="init params")
-
-  # We always load a model, and we don't support checkpointing.
-  write_note(f"Initialize model from {config.model_init}...")
-  params_cpu = model_mod.load(
-      params_cpu, config.model_init, config.get("model"),
-      **config.get("model_load", {}))
-  if jax.process_index() == 0:
-    parameter_overview.log_parameter_overview(params_cpu, msg="restored params")
     num_params = sum(p.size for p in jax.tree_leaves(params_cpu))
     mw.measure("num_params", num_params)
+
+  # The use-case for not loading an init is testing and debugging.
+  if config.get("model_init"):
+    write_note(f"Initialize model from {config.model_init}...")
+    params_cpu = model_mod.load(
+        params_cpu, config.model_init, config.get("model"),
+        **config.get("model_load", {}))
+    if jax.process_index() == 0:
+      parameter_overview.log_parameter_overview(params_cpu, msg="loaded params")
 
   write_note("Replicating...")
   params_repl = flax_utils.replicate(params_cpu)
@@ -107,17 +110,24 @@ def main(argv):
 
   evaluators = eval_common.from_config(
       config, {"predict": predict_fn, "model": model},
-      lambda s: write_note(f"Initializing evaluator: {s}..."))
+      lambda s: write_note(f"Initializing evaluator: {s}..."),
+      lambda key, cfg: 1,  # Ignore log_steps, always run.
+  )
 
-  mw.step_start(0)
-  for (name, evaluator, _, prefix) in evaluators:
-    write_note(f"{name} evaluation...")
-    with u.profile(name):
-      with u.log_timing(mw, f"z/secs/eval/{name}"):
-        for key, value in evaluator.run(params_repl):
-          mw.measure(f"{prefix}{key}", value)
-        u.sync()  # sync barrier to get correct measurements
-  mw.step_end()
+  # Allow running for multiple steps can be useful for couple cases:
+  # 1. non-deterministic evaluators
+  # 2. warmup when timing evaluators (eg compile cache etc).
+  for s in range(config.get("eval_repeats", 1)):
+    mw.step_start(s)
+    for (name, evaluator, _, prefix) in evaluators:
+      write_note(f"{name} evaluation step {s}...")
+      with u.profile(name, noop=name in config.get("no_profile", [])):
+        with u.chrono.log_timing(f"z/secs/eval/{name}"):
+          for key, value in evaluator.run(params_repl):
+            mw.measure(f"{prefix}{key}", value)
+          u.sync()  # sync barrier to get correct measurements
+    u.chrono.flush_timings()
+    mw.step_end()
 
   write_note("Done!")
   mw.close()

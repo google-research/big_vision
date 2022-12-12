@@ -72,6 +72,13 @@ class PreprocessOpsTest(tf.test.TestCase):
     for out in self.tfrun(pp.get_onehot(4, "labels", multi=True), data):
       self.assertAllClose(out["labels"], [1., 0., 1., 1.])
 
+  def test_onehot_2d(self):
+    data = {"labels": tf.constant([[2, 3], [0, 1]], dtype=tf.int64)}
+    for out in self.tfrun(pp.get_onehot(4, "labels", multi=False), data):
+      self.assertAllClose(out["labels"], [
+          [[0., 0., 1., 0.], [0., 0., 0., 1.]],
+          [[1., 0., 0., 0.], [0., 1., 0., 0.]]])
+
   def test_onehot_smoothing(self):
     data = {"labels": tf.constant([2, 3, 0], dtype=tf.int64)}
     for out in self.tfrun(

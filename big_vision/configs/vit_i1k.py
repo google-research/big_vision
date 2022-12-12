@@ -65,14 +65,15 @@ def get_config(arg=None):
   config.seed = 0
   config.total_epochs = 300
   config.num_classes = 1000
-  config.loss = 'softmax_xent'
+  config.loss = 'sigmoid_xent'
+  config.init_head_bias = -6.9
 
   # If this gives a KeyError, lookup Fig4 of the paper and add an entry.
   # Note, this here is a good average between 30ep and 300ep, sometimes you coud
   # find a slightly better setting for either of them.
   aug_setting = arg.aug or {
       'Ti/16': 'light1',
-      'S/32': 'light2',
+      'S/32': 'medium1',
       'S/16': 'medium2',
       'B/32': 'medium2',
       'B/16': 'medium2',

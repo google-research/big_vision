@@ -104,7 +104,7 @@ def make(config, params, *, sched_kw):
     wd_mults = config.get("wd_mults", [(".*/kernel$", 1.0)])
     masks, mults = _make_mask_trees(params, wd_mults, "config.wd_mults")
     weight_decay_txs = [
-        optax.additive_weight_decay(config.wd * mult, mask)
+        optax.add_decayed_weights(config.wd * mult, mask)
         for mult, mask in zip(mults, masks)
     ]
   else:

@@ -222,16 +222,28 @@ class TreeTest(tf.test.TestCase):
 class StepConversionTest(parameterized.TestCase, tf.test.TestCase):
 
   @parameterized.named_parameters(
-      ('nice_steps', 1000, 100, dict(foo_steps=3), 3),
-      ('nice_epochs', 1000, 100, dict(foo_epochs=3), 30),
-      ('nice_examples', 1000, 100, dict(foo_examples=300), 3),
-      ('offbyone_steps', 1001, 100, dict(foo_steps=3), 3),
-      ('offbyone_epochs', 1001, 100, dict(foo_epochs=3), 30),
-      ('offbyone_examples', 1001, 100, dict(foo_examples=300), 3),
+      ('nice_steps', 1000, None, None, dict(foo_steps=3), 3),
+      ('nice_epochs', 1000, 100, None, dict(foo_epochs=3), 30),
+      ('nice_examples', None, 100, None, dict(foo_examples=300), 3),
+      ('nice_percent', None, None, 10, dict(foo_percent=0.30), 3),
+      ('offbyone_steps', 1001, None, None, dict(foo_steps=3), 3),
+      ('offbyone_epochs', 1001, 100, None, dict(foo_epochs=3), 30),
+      ('offbyone_examples', None, 101, None, dict(foo_examples=300), 3),
+      ('offbyone_percent', None, None, 11, dict(foo_percent=0.30), 3),
   )
-  def test_steps(self, data_size, batch_size, cfg, expected):
-    step = utils.steps('foo', cfg, data_size=data_size, batch_size=batch_size)
-    self.assertAlmostEqual(step, expected)
+  def test_steps(self, data_size, batch_size, total, cfg, expected):
+    # Correct default usage:
+    step = utils.steps('foo', cfg, data_size=data_size, batch_size=batch_size,
+                       total_steps=total)
+    self.assertEqual(step, expected)
+
+    # Inexitent entry:
+    with self.assertRaises(ValueError):
+      step = utils.steps('bar', cfg, data_size=data_size, batch_size=batch_size,
+                         total_steps=total)
+    step = utils.steps('bar', cfg, data_size=data_size, batch_size=batch_size,
+                       total_steps=total, default=1234)
+    self.assertEqual(step, 1234)
 
 
 class CreateLearningRateScheduleTest(parameterized.TestCase, tf.test.TestCase):

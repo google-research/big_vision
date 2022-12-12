@@ -38,6 +38,9 @@ def merge_params(loaded, inited, dont_load=()):
     If structures don't match and mismatches are not covered by regexes in
     `dont_load` argument, then raises an exception with more information.
   """
+  if inited is None:  # A useful shortcut for example for colabs.
+    return loaded
+
   dont_load = u.check_and_compile_patterns(dont_load)
 
   def should_merge(name):
