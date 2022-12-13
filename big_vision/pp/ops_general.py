@@ -81,7 +81,7 @@ def get_lookup(mapping, npzkey="fnames", sep=None):
   # - a pair, separated by `sep` per line, first value being the string, second
   #   value being the integer that the string is mapped to.
   else:
-    with tf.io.gfile.GFile(mapping, "rt") as f:
+    with tf.io.gfile.GFile(mapping, "r") as f:
       buf = f.read()
     if sep is None:  # values are the line numbers
       keys = buf.splitlines()
@@ -92,12 +92,9 @@ def get_lookup(mapping, npzkey="fnames", sep=None):
 
   def _do_the_mapping(needle):
     """Map string to number."""
-
-    with tf.init_scope():
-      init = tf.lookup.KeyValueTensorInitializer(
-          tf.constant(keys), tf.constant(vals))
-      table = tf.contrib.lookup.HashTable(init, -1)
-
+    with tf.init_scope():  # (Originally added for performance reasons.)
+      table = tf.lookup.StaticHashTable(
+          tf.lookup.KeyValueTensorInitializer(keys, vals), -1)
     return table.lookup(needle)
 
   return _do_the_mapping

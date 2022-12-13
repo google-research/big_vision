@@ -93,6 +93,11 @@ We have a powerful configuration system, with the configs living in the
 `configs/` directory. Custom trainers and modules can directly extend/modify
 the configuration options.
 
+Project-specific code resides in the `.../proj/...` namespace. It is not always
+possible to keep project-specific in sync with the core `big_vision` libraries,
+Below we provide the [last known commit](#project-specific-commits)
+for each project where the project code is expected to work.
+
 Training jobs are robust to interruptions and will resume seamlessly from the
 last saved checkpoint (assuming a user provides the correct `--workdir` path).
 
@@ -343,6 +348,18 @@ and if this baseline happens to by useful for your research, consider citing
   year = {2022},
 }
 ```
+
+# Project specific commits
+
+The last known commit where the specific project code is expected to work. The
+core code and configs are expected to work at head.
+
+| Project    | Commit                                                                                        |
+|------------|-----------------------------------------------------------------------------------------------|
+| UViM       | https://github.com/google-research/big_vision/commit/21bd6ebe253f070f584d8b777ad76f4abce51bef |
+| image_text | https://github.com/google-research/big_vision/commit/8921d5141504390a8a4f7b2dacb3b3c042237290 |
+| distill    | https://github.com/google-research/big_vision/commit/2f3f493af048dbfd97555ff6060f31a0e686f17f |
+| GSAM       | WIP                                                                                           |
 
 # Citing the codebase
 
