@@ -64,32 +64,21 @@ def bit_paper(config):
   config.evals = {}
   config.evals.fewshot = get_fewshot_lsr()
 
-  pp_clf = (
-      'decode|resize(384)|value_range(-1, 1)'
-      '|onehot(1000, key="{lbl}", key_result="labels")'
-      '|keep("image", "labels")'
-  )
-  common_clf = dict(
-      type='classification',
-      loss_name='softmax_xent',
-      cache_final=False,  # Only run once, on low-mem machine.
-      dataset='imagenet2012_real',
-      split='validation',
-  )
-  config.evals.test = {
-      **common_clf,
-      'pp_fn': pp_clf.format(lbl='original_label'),
-  }
-  config.evals.real = {
-      **common_clf,
-      'pp_fn': pp_clf.format(lbl='real_label'),
-  }
-  config.evals.v2 = {
-      **common_clf,
-      'dataset': 'imagenet_v2',
-      'split': 'test',
-      'pp_fn': pp_clf.format(lbl='label'),
-  }
+  def get_eval(split, lbl, dataset='imagenet2012_real'):
+    return dict(
+        type='classification',
+        data=dict(name=dataset, split=split),
+        loss_name='softmax_xent',
+        cache_final=False,  # Only run once, on low-mem machine.
+        pp_fn=(
+            'decode|resize(384)|value_range(-1, 1)'
+            f'|onehot(1000, key="{lbl}", key_result="labels")'
+            '|keep("image", "labels")'
+        ),
+    )
+  config.evals.test = get_eval('validation', 'original_label')
+  config.evals.real = get_eval('validation', 'real_label')
+  config.evals.v2 = get_eval('test', 'label', 'imagenet_v2')
 
 
 def vit_i1k(config):
@@ -107,8 +96,7 @@ def vit_i1k(config):
   config.evals.fewshot = get_fewshot_lsr()
   config.evals.val = dict(
       type='classification',
-      dataset='imagenet2012',
-      split='validation',
+      data=dict(name='imagenet2012', split='validation'),
       pp_fn='decode|resize_small(256)|central_crop(224)|value_range(-1, 1)|onehot(1000, key="label", key_result="labels")|keep("image", "labels")',
       loss_name='softmax_xent',
       cache_final=False,  # Only run once, on low-mem machine.
@@ -129,8 +117,7 @@ def mlp_mixer_i1k(config):
   config.evals.fewshot = get_fewshot_lsr()
   config.evals.val = dict(
       type='classification',
-      dataset='imagenet2012',
-      split='validation',
+      data=dict(name='imagenet2012', split='validation'),
       pp_fn='decode|resize_small(256)|central_crop(224)|value_range(-1, 1)|onehot(1000, key="label", key_result="labels")|keep("image", "labels")',
       loss_name='softmax_xent',
       cache_final=False,  # Only run once, on low-mem machine.
@@ -151,8 +138,7 @@ def vit_i21k(config):
   config.evals.fewshot = get_fewshot_lsr()
   config.evals.val = dict(
       type='classification',
-      dataset='imagenet21k',
-      split='full[:51200]',
+      data=dict(name='imagenet21k', split='full[:51200]'),
       pp_fn='decode|resize_small(256)|central_crop(224)|value_range(-1, 1)|onehot(21843)|keep("image", "labels")',
       loss_name='sigmoid_xent',
       cache_final=False,  # Only run once, on low-mem machine.

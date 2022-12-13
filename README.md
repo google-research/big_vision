@@ -61,12 +61,6 @@ codebase:
   and Alexander Kolesnikov*\
   Resources: [README](big_vision/configs/proj/distill/README.md), [trainer](big_vision/trainers/proj/distill/distill.py), [colab](https://colab.research.google.com/drive/1nMykzUzsfQ_uAxfj3k35DYsATnG_knPl?usp=sharing).
 
-### Misc
-
-- [Are we done with ImageNet?](https://arxiv.org/abs/2006.07159), by
-  Lucas Beyer*, Olivier J. Hénaff*, Alexander Kolesnikov*, Xiaohua Zhai*,
-  and Aäron van den Oord*
-
 ### Training
 
 - [Sharpness-Aware Minimization for Efficiently Improving Generalization](https://arxiv.org/abs/2010.01412), by
@@ -74,6 +68,12 @@ codebase:
 
 - [Surrogate Gap Minimization Improves Sharpness-Aware Training](https://arxiv.org/abs/2203.08065), by Juntang Zhuang, Boqing Gong, Liangzhe Yuan, Yin Cui, Hartwig Adam, Nicha Dvornek, Sekhar Tatikonda, James Duncan and Ting Liu \
   Resources: [trainer](big_vision/trainers/proj/gsam/gsam.py), [config](big_vision/configs/proj/gsam/vit_i1k_gsam_no_aug.py) [reproduced results](https://github.com/google-research/big_vision/pull/8#pullrequestreview-1078557411)
+
+### Misc
+
+- [Are we done with ImageNet?](https://arxiv.org/abs/2006.07159), by
+  Lucas Beyer*, Olivier J. Hénaff*, Alexander Kolesnikov*, Xiaohua Zhai*,
+  and Aäron van den Oord*
 
 # Codebase high-level organization and principles in a nutshell
 

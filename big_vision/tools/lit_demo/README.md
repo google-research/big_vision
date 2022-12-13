@@ -1,12 +1,11 @@
 # LiT-Demo
 
-Developed for
-https://ai.googleblog.com/2022/04/locked-image-tuning-adding-language.html
+See https://blog.tensorflow.org/2022/08/jax-on-web-with-tensorflowjs.html
 
-See
+Demo originally appeared on Twitter
 https://twitter.com/AndreasPSteiner/status/1514722383818543106
 
-Published at
+App published at
 https://google-research.github.io/vision_transformer/lit
 
 ## Build
@@ -25,4 +24,3 @@ The web app will appear on http://localhost:8000
 ```
 node build.js
 ```
-

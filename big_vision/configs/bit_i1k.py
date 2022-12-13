@@ -20,7 +20,7 @@ Run training of a BiT-ResNet-50x1 variant, which takes ~32min on v3-128:
 big_vision.train \
     --config big_vision/configs/bit_i1k.py \
     --workdir gs://[your_bucket]/big_vision/`date '+%m-%d_%H%M'` \
-    --config.model.depth 50 --config.model.with 1
+    --config.model.depth 50 --config.model.width 1
 """
 
 # from big_vision.configs.common_fewshot import get_fewshot_lsr

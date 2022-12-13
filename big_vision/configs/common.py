@@ -14,7 +14,16 @@
 
 """A few things commonly used across A LOT of config files."""
 
+import string
+
 import ml_collections as mlc
+
+
+def input_for_quicktest(config_input, quicktest):
+  if quicktest:
+    config_input.batch_size = 8
+    config_input.shuffle_buffer_size = 10
+    config_input.cache_raw = False
 
 
 def parse_arg(arg, lazy=False, **spec):
@@ -122,3 +131,43 @@ def autotype(x):
 def pack_arg(**kw):
   """Packs key-word args as a string to be parsed by `parse_arg()`."""
   return ','.join([f'{k}={v}' for k, v in kw.items()])
+
+
+def _get_field_ref(config_dict, field_name):
+  path = field_name.split('.')
+  for field in path[:-1]:
+    config_dict = getattr(config_dict, field)
+  return config_dict.get_ref(path[-1])
+
+
+def format_str(format_string, config):
+  """Format string with reference fields from config.
+
+  This makes it easy to build preprocess strings that contain references to
+  fields tha are edited after. E.g.:
+
+  ```
+  config = mlc.ConficDict()
+  config.res = (256, 256)
+  config.pp = bvcc.format_str('resize({res})', config)
+  ...
+  # if config.res is modified (e.g. via sweeps) it will propagate to pp field:
+  config.res = (512, 512)
+  assert config.pp == 'resize((512, 512))'
+  ```
+
+  Args:
+    format_string: string to format with references.
+    config: ConfigDict to get references to format the string.
+
+  Returns:
+    A reference field which renders a string using references to config fields.
+  """
+  output = ''
+  parts = string.Formatter().parse(format_string)
+  for (literal_text, field_name, format_spec, conversion) in parts:
+    assert not format_spec and not conversion
+    output += literal_text
+    if field_name:
+      output += _get_field_ref(config, field_name).to_str()
+  return output

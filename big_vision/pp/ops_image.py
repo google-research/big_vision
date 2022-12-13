@@ -42,14 +42,15 @@ def get_decode(channels=3):
 
 @Registry.register("preprocess_ops.resize")
 @utils.InKeyOutKey()
-def get_resize(size, method="bilinear"):
+def get_resize(size, method="bilinear", antialias=False):
   """Resizes image to a given size.
 
   Args:
     size: either an integer H, where H is both the new height and width
       of the resized image, or a list or tuple [H, W] of integers, where H and W
       are new image"s height and width respectively.
-    method: rezied method, see tf.image.resize docs for options.
+    method: resize method, see tf.image.resize docs for options.
+    antialias: see tf.image.resize. Ideally set to True for all new configs.
 
   Returns:
     A function for resizing an image.
@@ -65,7 +66,7 @@ def get_resize(size, method="bilinear"):
     # to learn a shortcut in self-supervised rotation task, if rotation was
     # applied after resize.
     dtype = image.dtype
-    image = tf.image.resize(image, size, method)
+    image = tf.image.resize(image, size, method=method, antialias=antialias)
     return tf.cast(image, dtype)
 
   return _resize
@@ -73,20 +74,21 @@ def get_resize(size, method="bilinear"):
 
 @Registry.register("preprocess_ops.resize_small")
 @utils.InKeyOutKey()
-def get_resize_small(smaller_size, method="area", antialias=True):
+def get_resize_small(smaller_size, method="area", antialias=False):
   """Resizes the smaller side to `smaller_size` keeping aspect ratio.
 
   Args:
     smaller_size: an integer, that represents a new size of the smaller side of
       an input image.
     method: the resize method. `area` is a meaningful, bwd-compat default.
-    antialias: See TF's image.resize method.
+    antialias: see tf.image.resize. Ideally set to True for all new configs.
 
   Returns:
     A function, that resizes an image and preserves its aspect ratio.
 
   Note:
-    backwards-compat tested here: (internal link)
+    backwards-compat for "area"+antialias tested here:
+    (internal link)
   """
 
   def _resize_small(image):  # pylint: disable=missing-docstring
@@ -100,7 +102,7 @@ def get_resize_small(smaller_size, method="area", antialias=True):
     w = tf.cast(tf.round(tf.cast(w, tf.float32) * ratio), tf.int32)
 
     dtype = image.dtype
-    image = tf.image.resize(image, (h, w), method, antialias)
+    image = tf.image.resize(image, (h, w), method=method, antialias=antialias)
     return tf.cast(image, dtype)
 
   return _resize_small
@@ -108,7 +110,8 @@ def get_resize_small(smaller_size, method="area", antialias=True):
 
 @Registry.register("preprocess_ops.inception_crop")
 @utils.InKeyOutKey()
-def get_inception_crop(size=None, area_min=5, area_max=100, method="bilinear"):
+def get_inception_crop(size=None, area_min=5, area_max=100,
+                       method="bilinear", antialias=False):
   """Makes inception-style image crop.
 
   Inception-style crop is a random image crop (its size and aspect ratio are
@@ -120,6 +123,7 @@ def get_inception_crop(size=None, area_min=5, area_max=100, method="bilinear"):
     area_min: minimal crop area.
     area_max: maximal crop area.
     method: rezied method, see tf.image.resize docs for options.
+    antialias: see tf.image.resize. Ideally set to True for all new configs.
 
   Returns:
     A function, that applies inception crop.
@@ -137,7 +141,7 @@ def get_inception_crop(size=None, area_min=5, area_max=100, method="bilinear"):
     # to restore it the manual way.
     crop.set_shape([None, None, image.shape[-1]])
     if size:
-      crop = get_resize(size, method)({"image": crop})["image"]
+      crop = get_resize(size, method, antialias)({"image": crop})["image"]
     return crop
 
   return _inception_crop
@@ -146,7 +150,7 @@ def get_inception_crop(size=None, area_min=5, area_max=100, method="bilinear"):
 @Registry.register("preprocess_ops.decode_jpeg_and_inception_crop")
 @utils.InKeyOutKey()
 def get_decode_jpeg_and_inception_crop(size=None, area_min=5, area_max=100,
-                                       method="bilinear"):
+                                       method="bilinear", antialias=False):
   """Decode jpeg string and make inception-style image crop.
 
   Inception-style crop is a random image crop (its size and aspect ratio are
@@ -158,6 +162,7 @@ def get_decode_jpeg_and_inception_crop(size=None, area_min=5, area_max=100,
     area_min: minimal crop area.
     area_max: maximal crop area.
     method: rezied method, see tf.image.resize docs for options.
+    antialias: see tf.image.resize. Ideally set to True for all new configs.
 
   Returns:
     A function, that applies inception crop.
@@ -179,7 +184,7 @@ def get_decode_jpeg_and_inception_crop(size=None, area_min=5, area_max=100,
     image = tf.image.decode_and_crop_jpeg(image_data, crop_window, channels=3)
 
     if size:
-      image = get_resize(size, method)({"image": image})["image"]
+      image = get_resize(size, method, antialias)({"image": image})["image"]
 
     return image
 
@@ -254,8 +259,6 @@ def get_vgg_value_range(
   and to this day the standard for models coming from most PyTorch codes.
 
   Args:
-    vmin: A scalar. Output max value.
-    vmax: A scalar. Output min value.
     mean: Tuple of values to be subtracted.
     std: Tuple of values to be divided by.
 

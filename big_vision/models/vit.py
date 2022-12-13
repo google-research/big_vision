@@ -27,7 +27,7 @@ import flax.linen as nn
 import flax.training.checkpoints
 import jax.numpy as jnp
 import numpy as np
-import scipy
+import scipy.ndimage
 
 
 def posemb_sincos_2d(h, w, width, temperature=10_000., dtype=jnp.float32):
@@ -149,7 +149,7 @@ class MAPHead(nn.Module):
 class _Model(nn.Module):
   """ViT model."""
 
-  num_classes: int
+  num_classes: Optional[int] = None
   patch_size: Sequence[int] = (16, 16)
   width: int = 768
   depth: int = 12
@@ -228,7 +228,7 @@ class _Model(nn.Module):
     return x, out
 
 
-def Model(num_classes, *, variant=None, **kw):  # pylint: disable=invalid-name
+def Model(num_classes=None, *, variant=None, **kw):  # pylint: disable=invalid-name
   """Factory function, because linen really don't like what I'm doing!"""
   return _Model(num_classes, **{**decode_variant(variant), **kw})
 
@@ -325,7 +325,7 @@ def load(init_params, init_file, model_cfg, dont_load=()):  # pylint: disable=in
   restored_params = common.merge_params(restored_params, init_params, dont_load)
 
   # resample posemb if needed.
-  if "pos_embedding" in init_params:
+  if init_params and "pos_embedding" in init_params:
     restored_params["pos_embedding"] = resample_posemb(
         old=restored_params["pos_embedding"],
         new=init_params["pos_embedding"])
