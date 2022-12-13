@@ -95,7 +95,7 @@ the configuration options.
 
 Project-specific code resides in the `.../proj/...` namespace. It is not always
 possible to keep project-specific in sync with the core `big_vision` libraries,
-so below ([link](#project-specific-commits)) we provide the last known commit
+Below we provide the [last known commit](#project-specific-commits)
 for each project where the project code is expected to work.
 
 Training jobs are robust to interruptions and will resume seamlessly from the
@@ -351,7 +351,8 @@ and if this baseline happens to by useful for your research, consider citing
 
 # Project specific commits
 
-The last known commit where the specific project code is expected to work.
+The last known commit where the specific project code is expected to work. The
+core code and configs are expected to work at head.
 
 | Project    | Commit                                                                                        |
 |------------|-----------------------------------------------------------------------------------------------|
