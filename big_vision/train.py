@@ -18,7 +18,6 @@ This is a basic variant of a training loop, good starting point for fancy ones.
 """
 # pylint: disable=consider-using-from-import
 import functools
-from functools import partial
 import importlib
 import multiprocessing.pool
 import os
@@ -135,12 +134,12 @@ def main(argv):
   # We want all parameters to be created in host RAM, not on any device, they'll
   # be sent there later as needed, otherwise we already encountered two
   # situations where we allocate them twice.
-  @partial(jax.jit, backend="cpu")
+  @functools.partial(jax.jit, backend="cpu")
   def init(rng):
-    shape = tuple(train_ds.element_spec["image"].shape[1:])
     bs = batch_size // jax.device_count()
-    dummy_input = jnp.zeros((bs,) + shape, jnp.float32)
-    params = flax.core.unfreeze(model.init(rng, dummy_input))["params"]
+    image_size = tuple(train_ds.element_spec["image"].shape[1:])
+    no_image = jnp.zeros((bs,) + image_size, jnp.float32)
+    params = flax.core.unfreeze(model.init(rng, no_image))["params"]
 
     # Set bias in the head to a low value, such that loss is small initially.
     if "init_head_bias" in config:
@@ -166,7 +165,7 @@ def main(argv):
   opt_cpu = jax.jit(tx.init, backend="cpu")(params_cpu)
   sched_fns_cpu = [jax.jit(sched_fn, backend="cpu") for sched_fn in sched_fns]
 
-  @partial(jax.pmap, axis_name="batch", donate_argnums=(0, 1))
+  @functools.partial(jax.pmap, axis_name="batch", donate_argnums=(0, 1))
   def update_fn(params, opt, rng, images, labels):
     """Update step."""
 
@@ -313,7 +312,8 @@ def main(argv):
       u.chrono.resume()
 
     for (name, evaluator, log_steps, prefix) in evaluators():
-      if u.itstime(step, log_steps, total_steps, last=False):
+      if u.itstime(step, log_steps, total_steps, first=log_steps < total_steps,
+                   last=False):
         u.chrono.pause(wait_for=params_repl)
         u.chrono.tick(step)  # Record things like epoch number, core hours etc.
         write_note(f"{name} evaluation...\n{u.chrono.note}")

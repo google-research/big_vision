@@ -881,7 +881,7 @@ def create_learning_rate_schedule(
     total_steps, batch_size=None, data_size=None,
     base=1.0, decay_type="stair",
     scale_with_batchsize=False, **kw):
-  """Creates learning rate schedule, see (internal link)
+  """Creates learning rate schedule, see (internal link).
 
   Args:
     total_steps: The total number of steps to run.

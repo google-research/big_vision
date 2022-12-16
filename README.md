@@ -44,8 +44,13 @@ codebase:
   Lucas Beyer, Xiaohua Zhai, Alexander Kolesnikov\
   Resources: [config](big_vision/configs/vit_s16_i1k.py)
 - [UViM: A Unified Modeling Approach for Vision with Learned Guiding Codes](https://arxiv.org/abs/2205.10337), by
-  Alexander Kolesnikov^*, André Susano Pinto^*, Lucas Beyer*, Xiaohua Zhai*, Jeremiah Harmsen*, Neil Houlsby*
+  Alexander Kolesnikov^*, André Susano Pinto^*, Lucas Beyer*, Xiaohua Zhai*, Jeremiah Harmsen*, Neil Houlsby*\
   Resources: [readme](big_vision/configs/proj/uvim/README.md), [configs](big_vision/configs/proj/uvim), [colabs](big_vision/configs/proj/uvim).
+- [FlexiViT: One Model for All Patch Sizes](https://arxiv.org/abs/2212.08013), by
+  Lucas Beyer*, Pavel Izmailov*, Alexander Kolesnikov*, Mathilde Caron*, Simon
+  Kornblith*, Xiaohua Zhai*, Matthias Minderer*, Michael Tschannen*, Ibrahim
+  Alabdulmohsin*, Filip Pavetic*\
+  Resources: [readme](big_vision/configs/proj/flexivit/README.md), [configs](big_vision/configs/proj/flexivit).
 
 ### Multimodal research
 
@@ -287,7 +292,7 @@ Specifically, the seven TFDS datasets used during evaluations will be generated
 under `~/tensorflow_datasets` on TPU machine with this command:
 
 ```
-gcloud alpha compute tpus tpu-vm ssh $NAME --zone=$ZONE --worker=0 --command "bash big_vision/run_tpu.sh big_vision.tools.download_tfds_datasets cifar10 cifar100 oxford_iiit_pet oxford_flowers102 cars196 dtd uc_merced"
+gcloud alpha compute tpus tpu-vm ssh $NAME --zone=$ZONE --worker=0 --command "TFDS_DATA_DIR=~/tensorflow_datasets bash big_vision/run_tpu.sh big_vision.tools.download_tfds_datasets cifar10 cifar100 oxford_iiit_pet oxford_flowers102 cars196 dtd uc_merced"
 ```
 
 You can then copy the datasets to GS bucket, to make them accessible to all TPU workers.
