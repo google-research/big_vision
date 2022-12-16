@@ -351,6 +351,21 @@ VANITY_NAMES = {
     "i1k-s16-90ep": "gs://big_vision/vit_s16_i1k_90ep.npz",
     "i1k-s16-150ep": "gs://big_vision/vit_s16_i1k_150ep.npz",
     "i1k-s16-300ep": "gs://big_vision/vit_s16_i1k_300ep.npz",
+
+    # DeiT-3 checkpoints from https://github.com/facebookresearch/deit/blob/main/README_revenge.md
+    # First layer converted to take inputs in [-1,1]
+    "deit3_S_224_1k": "gs://big_vision/zoo/deit3/bv_deit_3_small_224_1k.npz",
+    "deit3_S_224_21k": "gs://big_vision/zoo/deit3/bv_deit_3_small_224_21k.npz",
+    "deit3_S_384_1k": "gs://big_vision/zoo/deit3/bv_deit_3_small_384_1k.npz",
+    "deit3_S_384_21k": "gs://big_vision/zoo/deit3/bv_deit_3_small_384_21k.npz",
+    "deit3_B_224_1k": "gs://big_vision/zoo/deit3/bv_deit_3_base_224_1k.npz",
+    "deit3_B_224_21k": "gs://big_vision/zoo/deit3/bv_deit_3_base_224_21k.npz",
+    "deit3_B_384_1k": "gs://big_vision/zoo/deit3/bv_deit_3_base_384_1k.npz",
+    "deit3_B_384_21k": "gs://big_vision/zoo/deit3/bv_deit_3_base_384_21k.npz",
+    "deit3_L_224_1k": "gs://big_vision/zoo/deit3/bv_deit_3_large_224_1k.npz",
+    "deit3_L_224_21k": "gs://big_vision/zoo/deit3/bv_deit_3_large_224_21k.npz",
+    "deit3_L_384_1k": "gs://big_vision/zoo/deit3/bv_deit_3_large_384_1k.npz",
+    "deit3_L_384_21k": "gs://big_vision/zoo/deit3/bv_deit_3_large_384_21k.npz",
     # pylint: disable=line-too-long
     # pylint: enable=line-too-long
 }

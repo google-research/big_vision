@@ -47,7 +47,12 @@ def from_config(config, predict_fns,
     cfg["batch_size"] = cfg.get("batch_size") or config.get("batch_size_eval") or config.get("input.batch_size") or config.get("batch_size")  # pylint: disable=line-too-long
 
     module = importlib.import_module(f"big_vision.evaluators.{module}")
-    predict_fn = predict_fns[pred_key]
+    try:
+      predict_fn = predict_fns[pred_key]
+    except KeyError as e:
+      raise ValueError(
+          f"Unknown predict_fn '{pred_key}'. Available predict_fns are:\n"
+          + "\n".join(predict_fns)) from e
     if pred_kw is not None:
       predict_fn = _CacheablePartial(predict_fn, flax.core.freeze(pred_kw))
     evaluator = module.Evaluator(predict_fn, **cfg)

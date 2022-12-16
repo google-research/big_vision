@@ -12,21 +12,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Training loop for distillation as in https://arxiv.org/abs/2106.05237.
+"""Distill a teacher model into a FlexiViT student.
 
-It works by having a (set of) teacher model(s) defined the same way as student
-in the config and, for now, only distilling logits with one of many loss
-functions.
-
-We explored distilling intermediate feature maps, extra data, and other tricks
-in depth in two interships in a separate prototype codebase but eventually they
-are not necessary, and thus not (yet?) implemented in this codebase.
-
-Thus, for now, there are no extra learnable parameters besides the student.
-This keeps code relatively simple.
+Note this file has code that is generic enough to allow using an ensemble
+of teachers. This is inherited from `proj/distill/distill.py` and the goal
+to only make minimal changes in a fork of that file. However, this feature
+does not really make sense for FlexiViT.
 """
 # pylint: disable=consider-using-from-import
-import functools
+from functools import partial
 import importlib
 import multiprocessing.pool
 import os
@@ -38,6 +32,7 @@ import big_vision.evaluators.common as eval_common
 import big_vision.evaluators.proj.distill.distance as dd
 import big_vision.input_pipeline as input_pipeline
 import big_vision.optax as bv_optax
+import big_vision.trainers.proj.flexi.common as flexi
 import big_vision.utils as u
 from clu import parameter_overview
 import flax
@@ -167,17 +162,12 @@ def main(argv):
   # be sent there later as needed, otherwise we already encountered two
   # situations where we allocate them twice.
   def get_init(model, name):
-    @functools.partial(jax.jit, backend="cpu")
+    @partial(jax.jit, backend="cpu")
     def _init(rng):
       bs = batch_size // jax.device_count()
       img_size = tuple(getfirst(train_ds.element_spec, name, "image").shape[1:])
       no_image = jnp.zeros((bs,) + img_size, jnp.float32)
       params = flax.core.unfreeze(model.init(rng, no_image))["params"]
-
-      # Set bias in the head to a low value, such that loss is small initially.
-      if "init_head_bias" in config:
-        params["head"]["bias"] = jnp.full_like(params["head"]["bias"],
-                                               config["init_head_bias"])
       return params
     return _init
 
@@ -206,7 +196,7 @@ def main(argv):
   sched_fns_cpu = [jax.jit(sched_fn, backend="cpu") for sched_fn in sched_fns]
 
   @jax.named_call
-  def loss_fn(student_params, params, data, rngs):
+  def loss_fn(student_params, params, data, rngs, **flexi_kw):
     # Note: need to extract and use `student_params` out of `params` because the
     # first argument of `loss_fn` is what's differentiated wrt.
     params["student"] = student_params
@@ -214,7 +204,8 @@ def main(argv):
     def fwd(name, params):
       return jax.named_call(models[name].apply, name=name)(
           {"params": params}, getfirst(data, name, "image"),
-          train=name == "student", rngs=rngs.get(name)
+          train=name == "student", rngs=rngs.get(name),
+          **(flexi_kw if name == "student" else {})
       )[0]  # logits, unused_outputs
     logits = {name: fwd(name, w) for name, w in params.items()}
 
@@ -238,8 +229,11 @@ def main(argv):
     outputs = (measurements["distill_loss"], measurements)
     return jax.tree_map(jnp.mean, outputs)
 
-  @functools.partial(jax.pmap, axis_name="batch", donate_argnums=(0, 1))
-  def update_fn(params, opt, rng, data):
+  flexi_argnames = sorted(config.flexi)
+
+  @partial(jax.pmap, axis_name="batch", donate_argnums=(0, 1),
+           static_broadcasted_argnums=tuple(range(4, 4 + len(flexi_argnames))))
+  def update_fn(params, opt, rng, data, *args):
     """Update step."""
 
     # Mixup. Note: overwrites the `data` entries (that's intended).
@@ -259,7 +253,8 @@ def main(argv):
     w = params["student"]  # Need to explicitly pull out the optimized ones.
     (l, measurements), grads = jax.lax.pmean(
         jax.value_and_grad(loss_fn, has_aux=True)(
-            w, params, data, rngs=rngs_models_local),
+            w, params, data, rngs=rngs_models_local,
+            **dict(zip(flexi_argnames, args))),
         axis_name="batch")
     updates, opt = tx.update(grads, opt, w)
     w = optax.apply_updates(w, updates)
@@ -326,37 +321,34 @@ def main(argv):
   params_repl = flax.jax_utils.replicate(params_cpu)
   opt_repl = flax.jax_utils.replicate(opt_cpu)
 
-  # Define predict functions that the evaluators can use:
-  # 1. One per model
-  predict_fns = {}
-  for name, model in models.items():
-    def fwd(params, image, n=name, m=model):
-      return m.apply({"params": params[n]}, image)
-    predict_fns[f"{name}_fwd"] = fwd
-  # 2. One for the ensemble of all teachers.
-  def teacher_ensemble_fwd(params, image):
-    all_teacher_logits = [
-        models[name].apply(params[name], image)[0]  # return is `logits, out`
-        for name in config.teachers
-    ]
-    return jnp.mean([jax.nn.softmax(l) for l in all_teacher_logits], axis=0), {}
-  predict_fns["teacher_ensemble_fwd"] = teacher_ensemble_fwd
-  # 3.One for each (student, teacher) pair, eg for distance eval.
-  for name in [*config.teachers, "teacher_ensemble"]:
-    def fwd(params, image, n=name):  # pylint: disable=function-redefined
-      student_ret = predict_fns["student_fwd"](params, image)
-      teacher_ret = predict_fns[f"{n}_fwd"](params, image)
-      return student_ret, teacher_ret
-    predict_fns[f"student_{name}_fwd"] = fwd
+  # Initializing evaluators later when they are first needed, so we can see
+  # issues with training faster.
+  evaluators = None
 
-  # Only initialize evaluators when they are first needed.
-  @functools.lru_cache(maxsize=None)
-  def evaluators():
-    return eval_common.from_config(
-        config, predict_fns,
-        lambda s: write_note(f"Init evaluator: {s}…\n{u.chrono.note}"),
-        lambda key, cfg: get_steps(key, default=None, cfg=cfg),
-    )
+  # Define predict functions that the evaluators can use:
+  def predict_fn(params, *, name, **kw):
+    image = kw.pop(name, kw.pop("image", None))
+    # Ugly API compatibility necessity:
+    for k in ("student", *config.teachers):
+      kw.pop(k, 0)
+    return models[name].apply({"params": params[name]}, image, **kw)
+
+  # 1. One for each variant of the student
+  student_pfns = flexi.mkpredictfns(partial(predict_fn, name="student"),
+                                    config.flexi, "student_{x}")
+  # 2. One per teacher model
+  teacher_pfns = {
+      name: partial(predict_fn, name=name)
+      for name in config.teachers
+  }
+  # 3. One for each (student-variant, teacher) pair, eg for distance eval.
+  combined_pfns = {
+      f"{sn}_{tn}": lambda *a, sfn=sfn, tfn=tfn, **kw: (sfn(*a, **kw), tfn(*a, **kw))  # pylint: disable=line-too-long
+      for sn, sfn in student_pfns.items()
+      for tn, tfn in teacher_pfns.items()
+  }
+
+  predict_fns = {**student_pfns, **teacher_pfns, **combined_pfns}
 
   rng, rng_loop = jax.random.split(rng, 2)
   rngs_loop = flax.jax_utils.replicate(rng_loop)
@@ -369,10 +361,16 @@ def main(argv):
   for step, batch in zip(range(first_step + 1, total_steps + 1), train_iter):
     mw.step_start(step)
 
+    np_rng = flexi.mkrng(xid, wid, step)
+    flexi_args = [
+        flexi.choice(config.flexi[n].v, config.flexi[n].p, np_rng)
+        for n in flexi_argnames
+    ]
+
     with jax.profiler.StepTraceAnnotation("train_step", step_num=step):
       with u.chrono.log_timing("z/secs/update0", noop=step > first_step + 1):
         params_repl, opt_repl, rngs_loop, loss_value, measurements = update_fn(
-            params_repl, opt_repl, rngs_loop, batch)
+            params_repl, opt_repl, rngs_loop, batch, *flexi_args)
 
     # On the first host, let's always profile a handful of early steps.
     if jax.process_index() == 0:
@@ -415,8 +413,14 @@ def main(argv):
           u.save_checkpoint, (ckpt, save_ckpt_path, copy_step))
       u.chrono.resume()
 
-    for (name, evaluator, log_steps, prefix) in evaluators():
-      if u.itstime(step, log_steps, total_steps, last=False):
+    if evaluators is None:
+      evaluators = eval_common.from_config(
+          config, predict_fns,
+          lambda s: write_note(f"Init evaluator: {s}…\n{u.chrono.note}"),
+          lambda key, cfg: get_steps(key, default=None, cfg=cfg),
+      )
+    for (name, evaluator, log_steps, prefix) in evaluators:
+      if u.itstime(step, log_steps, total_steps):
         u.chrono.pause(wait_for=params_repl)
         u.chrono.tick(step)  # Record things like epoch number, core hours etc.
         write_note(f"{name} evaluation...\n{u.chrono.note}")
@@ -425,16 +429,6 @@ def main(argv):
             mw.measure(f"{prefix}{key}", value)
         u.chrono.resume()
     mw.step_end()
-
-  # Run evals after done with training. Running them here guarantees evals
-  # will run if job is restarted after writting the last checkpoint and
-  # also supports eval only runs (when total_steps or num_epochs is 0).
-  mw.step_start(total_steps)
-  for (name, evaluator, _, prefix) in evaluators():
-    write_note(f"{name} evaluation...\n{u.chrono.note}")
-    with u.chrono.log_timing(f"z/secs/eval/{name}"):
-      for key, value in evaluator.run(params_repl):
-        mw.measure(f"{prefix}{key}", value)
 
   # Always give a chance to stop the profiler, no matter how things ended.
   # TODO: can we also do this when dying of an exception like OOM?
