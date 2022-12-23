@@ -32,16 +32,20 @@ _CLASS_NAMES = {  # For each dataset, maps from a source to its class names.
         "clip": imagenet_class_names.CLIP_IMAGENET_CLASS_NAMES,
     },
     "imagenet_a": {
-        "clip": [imagenet_class_names.CLIP_IMAGENET_CLASS_NAMES[i]
-                 for i in imagenet_class_names.IMAGENET_A_LABELSET]
+        "clip": [
+            imagenet_class_names.CLIP_IMAGENET_CLASS_NAMES[i]
+            for i in imagenet_class_names.IMAGENET_A_LABELSET
+        ]
     },
     "imagenet_r": {
-        "clip": [imagenet_class_names.CLIP_IMAGENET_CLASS_NAMES[i]
-                 for i in imagenet_class_names.IMAGENET_R_LABELSET]
+        "clip": [
+            imagenet_class_names.CLIP_IMAGENET_CLASS_NAMES[i]
+            for i in imagenet_class_names.IMAGENET_R_LABELSET
+        ]
     },
     "imagenet_v2": {
         "clip": imagenet_class_names.CLIP_IMAGENET_CLASS_NAMES,
-    }
+    },
 }
 
 _PROMPT_TEMPLATES = {
@@ -54,9 +58,9 @@ _PROMPT_TEMPLATES = {
 def get_class_names(*, dataset_name, source="dataset_info", canonicalize=True):
   """Returns class name for `dataset_name` from `source`."""
   if isinstance(source, str):
-    if source == "dataset_info":
-      class_names = _find_class_label_feature(
-          tfds.builder(dataset_name).info.features).names  # pytype: disable=attribute-error
+    if source.startswith("dataset_info:"):
+      name = source[len("dataset_info:"):]
+      class_names = tfds.builder(dataset_name).info.features[name].names
     else:
       class_names = _CLASS_NAMES[dataset_name][source]
   else:
@@ -87,20 +91,6 @@ def get_prompt_templates(prompt_templates_name,
   return prompts_templates
 
 
-def _find_class_label_feature(feature):
-  """Finds the first `ClassLabel` feature."""
-  if isinstance(feature, tfds.features.ClassLabel):
-    return feature
-  if isinstance(feature, tfds.features.Sequence):
-    return _find_class_label_feature(feature.feature)
-  if isinstance(feature, tfds.features.FeaturesDict):
-    for f in feature.values():
-      class_label = _find_class_label_feature(f)
-      if class_label:
-        return class_label
-  return None
-
-
 def _canonicalize(text, *, keep_punctuation_exact_string=None):
   """Returns canonicalized `text` (lowercase and puncuation removed).
 
@@ -120,4 +110,3 @@ def _canonicalize(text, *, keep_punctuation_exact_string=None):
   text = text.lower()
   text = re.sub(r"\s+", " ", text)
   return text.strip()
-

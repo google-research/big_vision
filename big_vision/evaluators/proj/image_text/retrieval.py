@@ -117,12 +117,10 @@ def prepare_datasets(dataset, *, pp_img, pp_txt, txt_name, offset=0):
     return {**features, "id": idx + offset}
 
   ds_images = dataset.enumerate().map(add_id).map(
-      pp_builder.get_preprocess_fn(
-          f"{pp_img}|keep('id', 'image')", remove_tpu_dtypes=False))
+      pp_builder.get_preprocess_fn(f"{pp_img}|keep('id', 'image')"))
   ds_texts = dataset.enumerate().flat_map(get_captions).map(
       pp_builder.get_preprocess_fn(
-          f"{pp_txt}|keep('id', 'caption_i', 'labels')",
-          remove_tpu_dtypes=False))
+          f"{pp_txt}|keep('id', 'caption_i', 'labels')"))
   return ds_images, ds_texts
 
 

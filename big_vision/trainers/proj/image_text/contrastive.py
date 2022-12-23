@@ -19,7 +19,7 @@ For models Like
 - CLIP (https://arxiv.org/abs/2103.00020)
 """
 # pylint: disable=consider-using-from-import
-from functools import partial
+import functools
 import importlib
 import multiprocessing.pool
 import os
@@ -27,11 +27,9 @@ import os
 from absl import app
 from absl import flags
 from absl import logging
-import big_vision.datasets.core as ds_core
 import big_vision.evaluators.common as eval_common
 import big_vision.input_pipeline as input_pipeline
 import big_vision.optax as bv_optax
-import big_vision.pp.builder as pp_builder
 import big_vision.utils as u
 from clu import parameter_overview
 import flax
@@ -116,27 +114,21 @@ def main(argv):
 
   # First thing after above sanity checks, so we can log "start" ticks.
   mw = u.BigVisionMetricWriter(xid, wid, workdir, config)
-  chrono = u.Chrono()
 
-  write_note("Initializing training pipeline...")
-  train_data = ds_core.get(**config.input.data)
-  train_ds = input_pipeline.make_for_train(
-      data=train_data.get_tfdata(ordered=False),
-      batch_size=batch_size,
-      preprocess_fn=pp_builder.get_preprocess_fn(config.input.get("pp")),
-      shuffle_buffer_size=config.input.get("shuffle_buffer_size"),
-      cache_raw=config.input.get("cache_raw", False),
-      filter_fn=config.input.get("filter_fn"),
-  )
+  write_note("Initializing train dataset...")
+  train_ds, ntrain_img = input_pipeline.training(config.input)
 
   # Start prefetching already.
   n_prefetch = config.get("prefetch_to_device", 1)
   train_iter = input_pipeline.start_input_pipeline(train_ds, n_prefetch)
-  ntrain_img = train_data.total_examples
 
-  def get_steps(name, default=ValueError):  # `partial` doesn't work well here.
-    return u.steps(name, config, ntrain_img, batch_size, default)
-  total_steps = get_steps("total")
+  total_steps = u.steps("total", config, ntrain_img, batch_size)
+  def get_steps(name, default=ValueError, cfg=config):
+    return u.steps(name, cfg, ntrain_img, batch_size, total_steps, default)
+
+  u.chrono.inform(total_steps=total_steps, global_bs=batch_size,
+                  steps_per_epoch=ntrain_img / batch_size,
+                  measure=mw.measure, write_note=write_note)
 
   info("Running for %d steps, that means %f epochs",
        total_steps, total_steps * batch_size / ntrain_img)
@@ -148,7 +140,7 @@ def main(argv):
   # We want all parameters to be created in host RAM, not on any device, they'll
   # be sent there later as needed, otherwise we already encountered two
   # situations where we allocate them twice.
-  @partial(jax.jit, backend="cpu")
+  @functools.partial(jax.jit, backend="cpu")
   def init(rng):
     bs = batch_size // jax.device_count()
     image_size = tuple(train_ds.element_spec["image"].shape[1:])
@@ -159,7 +151,7 @@ def main(argv):
     return params
 
   rng, rng_init = jax.random.split(rng)
-  with u.log_timing(mw, "z/secs/init"):
+  with u.chrono.log_timing("z/secs/init"):
     params_cpu = init(rng_init)
 
   if jax.process_index() == 0:
@@ -175,7 +167,7 @@ def main(argv):
   opt_cpu = jax.jit(tx.init, backend="cpu")(params_cpu)
   sched_fns_cpu = [jax.jit(sched_fn, backend="cpu") for sched_fn in sched_fns]
 
-  @partial(jax.pmap, axis_name="batch", donate_argnums=(0, 1))
+  @functools.partial(jax.pmap, axis_name="batch", donate_argnums=(0, 1))
   def update_fn(params, opt, rng, batch):
     """Update step."""
     assert "mixup" not in config, "We still have to figure out mixup."
@@ -228,6 +220,15 @@ def main(argv):
     zimg, ztxt, out = model.apply({"params": params}, image, text)
     return zimg, ztxt, out
 
+  # Only initialize evaluators when they are first needed.
+  @functools.lru_cache(maxsize=None)
+  def evaluators():
+    return eval_common.from_config(
+        config, {"predict": predict_fn},
+        lambda s: write_note(f"Init evaluator: {s}…\n{u.chrono.note}"),
+        lambda key, cfg: get_steps(key, default=None, cfg=cfg),
+    )
+
   # Decide how to initialize training. The order is important.
   # 1. Always resumes from the existing checkpoint, e.g. resumes a finetune job.
   # 2. Resume from a previous checkpoint, e.g. start a cooldown training job.
@@ -243,14 +244,14 @@ def main(argv):
     checkpoint = {
         "params": params_cpu,
         "opt": opt_cpu,
-        "chrono": chrono.save(),
+        "chrono": u.chrono.save(),
     }
     checkpoint_tree = jax.tree_structure(checkpoint)
     loaded = u.load_checkpoint(checkpoint_tree, resume_ckpt_path)
     # bfloat16 type gets lost when data is saved to disk, so we recover it.
     checkpoint = jax.tree_map(u.recover_dtype, loaded)
     params_cpu, opt_cpu = checkpoint["params"], checkpoint["opt"]
-    chrono.load(checkpoint["chrono"])
+    u.chrono.load(checkpoint["chrono"])
   elif config.get("model_init"):
     write_note(f"Initialize model from {config.model_init}...")
     params_cpu = model_mod.load(
@@ -262,23 +263,18 @@ def main(argv):
 
   write_note("Kicking off misc stuff...")
   first_step = bv_optax.get_count(opt_cpu)
-  chrono.inform(first_step, total_steps, batch_size, ntrain_img / batch_size)
+  u.chrono.inform(first_step=first_step)
   prof = None  # Keeps track of start/stop of profiler state.
 
-  write_note(f"Replicating...\n{chrono.note}")
+  write_note(f"Replicating...\n{u.chrono.note}")
   params_repl = flax.jax_utils.replicate(params_cpu)
   opt_repl = flax.jax_utils.replicate(opt_cpu)
-
-  # Initializing evaluators later when they are first needed, so we can see
-  # issues with training faster.
-  evaluators = None
 
   rng, rng_loop = jax.random.split(rng, 2)
   rngs_loop = flax.jax_utils.replicate(rng_loop)
   ckpt_writer = None
 
-  write_note(f"First step compilations...\n{chrono.note}")
-  error = None  # For exiting with an error after cleanup. Avoids indentation.
+  write_note(f"First step compilations...\n{u.chrono.note}")
 
   # Using a python integer for step here, because opt.state.step is allocated
   # on TPU during replication.
@@ -286,7 +282,7 @@ def main(argv):
     mw.step_start(step)
 
     with jax.profiler.StepTraceAnnotation("train_step", step_num=step):
-      with u.log_timing(mw, "z/secs/update0", noop=step > first_step + 1):
+      with u.chrono.log_timing("z/secs/update0", noop=step > first_step + 1):
         params_repl, opt_repl, rngs_loop, loss_value, measurements = update_fn(
             params_repl, opt_repl, rngs_loop, batch)
 
@@ -296,23 +292,22 @@ def main(argv):
 
     # Report training progress
     if (u.itstime(step, get_steps("log_training"), total_steps, host=0)
-        or chrono.warmup and jax.process_index() == 0):
+        or u.chrono.warmup and jax.process_index() == 0):
       for i, sched_fn_cpu in enumerate(sched_fns_cpu):
         mw.measure(f"global_schedule{i if i else ''}", sched_fn_cpu(step - 1))
       l = mw.measure("training_loss", loss_value[0])
       for name, value in measurements.items():
         mw.measure(name, value[0])
-      chrono.tick(step, mw.measure, write_note)
+      u.chrono.tick(step)
       if not np.isfinite(l):
-        error = (f"The loss became nan or inf somewhere within steps "
-                 f"[{step - get_steps('log_training')}, {step}]")
-        break
+        raise RuntimeError(f"The loss became nan or inf somewhere within steps "
+                           f"[{step - get_steps('log_training')}, {step}]")
 
     # Checkpoint saving
     if (save_ckpt_path and
         (u.itstime(step, get_steps("ckpt", None), total_steps, host=0) or
          u.itstime(step, get_steps("keep_ckpt", None), total_steps, host=0))):
-      chrono.pause(wait_for=(params_repl, opt_repl))
+      u.chrono.pause(wait_for=(params_repl, opt_repl))
       u.checkpointing_timeout(ckpt_writer, config.get("ckpt_timeout", 1))
       # We need to transfer the weights over now or else we risk keeping them
       # alive while they'll be updated in a future step, creating hard to debug
@@ -325,25 +320,32 @@ def main(argv):
       if u.itstime(step, get_steps("keep_ckpt", None), total_steps):
         copy_step = step
 
-      ckpt = {"params": params_cpu, "opt": opt_cpu, "chrono": chrono.save()}
+      ckpt = {"params": params_cpu, "opt": opt_cpu, "chrono": u.chrono.save()}
       ckpt_writer = pool.apply_async(
           u.save_checkpoint, (ckpt, save_ckpt_path, copy_step))
-      chrono.resume()
+      u.chrono.resume()
 
-    if evaluators is None:
-      evaluators = eval_common.from_config(
-          config, {"predict": predict_fn},
-          lambda s: write_note(f"Initializing evaluator: {s}...\n{chrono.note}")
-      )
-    for (name, evaluator, log_steps, prefix) in evaluators:
-      if u.itstime(step, log_steps, total_steps):
-        chrono.pause(wait_for=params_repl)
-        write_note(f"{name} evaluation...\n{chrono.note}")
-        with u.log_timing(mw, f"z/secs/eval/{name}"):
+    for (name, evaluator, log_steps, prefix) in evaluators():
+      if u.itstime(step, log_steps, total_steps, first=log_steps < total_steps,
+                   last=False):
+        u.chrono.pause(wait_for=params_repl)
+        u.chrono.tick(step)  # Record things like epoch number, core hours etc.
+        write_note(f"{name} evaluation...\n{u.chrono.note}")
+        with u.chrono.log_timing(f"z/secs/eval/{name}"):
           for key, value in evaluator.run(params_repl):
             mw.measure(f"{prefix}{key}", value)
-        chrono.resume()
+        u.chrono.resume()
     mw.step_end()
+
+  # Run evals after done with training. Running them here guarantees evals
+  # will run if job is restarted after writting the last checkpoint and
+  # also supports eval only runs (when total_steps or num_epochs is 0).
+  mw.step_start(total_steps)
+  for (name, evaluator, _, prefix) in evaluators():
+    write_note(f"{name} evaluation...\n{u.chrono.note}")
+    with u.chrono.log_timing(f"z/secs/eval/{name}"):
+      for key, value in evaluator.run(params_repl):
+        mw.measure(f"{prefix}{key}", value)
 
   # Always give a chance to stop the profiler, no matter how things ended.
   # TODO: can we also do this when dying of an exception like OOM?
@@ -351,10 +353,7 @@ def main(argv):
     u.startstop_prof(prof)
 
   # Last note needs to happen before the pool's closed =)
-  if not error:
-    write_note(f"Done!\n{chrono.note}")
-  else:
-    write_note(f"Failed!\n{error}\n{chrono.note}")
+  write_note(f"Done!\n{u.chrono.note}")
 
   pool.close()
   pool.join()
@@ -362,10 +361,6 @@ def main(argv):
 
   # Make sure all hosts stay up until the end of main.
   u.sync()
-
-  # Before cleanup, as cleanup should only run for successful jobs.
-  if error is not None:
-    raise RuntimeError(error)
 
   u.maybe_cleanup_workdir(workdir, flags.FLAGS.cleanup, info)
 

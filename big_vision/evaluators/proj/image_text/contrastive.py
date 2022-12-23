@@ -12,7 +12,18 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Evaluator for the contrastive task."""
+"""Evaluator for the contrastive task.
+
+DON'T COMPARE ACROSS RUNS, use for training health monitoring only.
+
+Note that this evaluator's `ncorrect_minibatch` is only a rough proxy for
+training progress and does not report the actual `ncorrect`: when the same
+labels found multiple times in a batch, then the reported value is biased
+towards lower values.
+
+Also note that the `ncorrect_minibatch` is a function of batch size (it's a lot
+easier to find correct values in small batches).
+"""
 import functools
 
 from big_vision import input_pipeline
@@ -38,9 +49,6 @@ def get_eval_fn(predict_fn, use_global_batch):
 
   @functools.partial(jax.pmap, axis_name="batch")
   def _eval_fn(params, images, labels, mask):
-
-    # Ignore the entries with all zero labels for evaluation.
-    mask *= jnp.clip(labels.max(axis=1), 0, 1)
     zimg, ztxt, extras = predict_fn(params, images, labels)
 
     if use_global_batch:
