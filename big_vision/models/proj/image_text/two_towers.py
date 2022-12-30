@@ -23,8 +23,6 @@ import jax.numpy as jnp
 
 ConfigDict = Any
 
-BASEDIR = "big_vision"
-
 
 class Model(nn.Module):
   """Two towers transformer."""
@@ -49,7 +47,7 @@ class Model(nn.Module):
     # Embed the text:
     if text is not None:
       text_model = importlib.import_module(
-          f"{BASEDIR}.models.{self.text_model}"
+          f"big_vision.models.{self.text_model}"
       ).Model(**{"num_classes": out_dims[1], **(self.text or {})}, name="txt")
 
     if text is not None:
@@ -63,7 +61,7 @@ class Model(nn.Module):
 
     if image is not None:
       image_model = importlib.import_module(
-          f"{BASEDIR}.models.{self.image_model}"
+          f"big_vision.models.{self.image_model}"
       ).Model(**{"num_classes": out_dims[0], **(self.image or {})}, name="img")  # pylint: disable=not-a-mapping
       zimg, out_img = image_model(image, **kw)
       for k, v in out_img.items():
@@ -99,13 +97,13 @@ def load(init_params, init_files, model_cfg, img_load_kw={}, txt_load_kw={}):  #
   img_init = init_files.pop("image", init_files.pop("img", None))
   if img_init:
     restored_params["img"] = importlib.import_module(
-        f"{BASEDIR}.models.{model_cfg.image_model}"
+        f"big_vision.models.{model_cfg.image_model}"
     ).load(init_params["img"], img_init, model_cfg.image, **img_load_kw)
 
   txt_init = init_files.pop("text", init_files.pop("txt", None))
   if txt_init:
     restored_params["txt"] = importlib.import_module(
-        f"{BASEDIR}.models.{model_cfg.text_model}"
+        f"big_vision.models.{model_cfg.text_model}"
     ).load(init_params["txt"], txt_init, model_cfg.text, **txt_load_kw)
 
   t_init = init_files.pop("temperature", init_files.pop("t", None))

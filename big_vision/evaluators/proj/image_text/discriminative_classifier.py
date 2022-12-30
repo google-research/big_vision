@@ -23,7 +23,6 @@ from big_vision.evaluators.proj.image_text import prompt_engineering
 from big_vision.pp import ops_general  # pylint: disable=unused-import
 from big_vision.pp import ops_image  # pylint: disable=unused-import
 import big_vision.pp.builder as pp_builder
-from clu import deterministic_data
 import flax
 import jax
 import jax.numpy as jnp
@@ -72,6 +71,7 @@ def prepare_datasets(img_dataset,
                      prompt_templates,
                      pp_img,
                      pp_txt,
+                     cache_final=False,
                      filter_fn=None,
                      class_name_offset=0):
   """Returns unbatched `ds_images, ds_texts` datasets."""
@@ -103,13 +103,13 @@ def prepare_datasets(img_dataset,
   if filter_fn:
     img_dataset = img_dataset.filter(filter_fn)
   ds_images = img_dataset.map(
-      pp_builder.get_preprocess_fn(
-          f"{pp_img}|keep('label', 'image')", remove_tpu_dtypes=False))
+      pp_builder.get_preprocess_fn(f"{pp_img}|keep('label', 'image')"))
   ds_texts = tf.data.Dataset.from_tensor_slices(list(class_names)).enumerate(
   ).flat_map(expand_aliases).flat_map(add_prompts).map(substitute_prompt).map(
-      pp_builder.get_preprocess_fn(
-          f"{pp_txt}|keep('label', 'labels')",
-          remove_tpu_dtypes=False))
+      pp_builder.get_preprocess_fn(f"{pp_txt}|keep('label', 'labels')"))
+
+  if cache_final:
+    ds_images, ds_texts = ds_images.cache(), ds_texts.cache()
 
   return ds_images, ds_texts
 
@@ -123,11 +123,6 @@ def _split_and_batch(dataset_name, data_dir, class_names, batch_size, split,
   batch_dims = [
       jax.local_device_count(), batch_size // jax.device_count()
   ]
-  info = _get_dataset_info(builder)
-  read_instruction = deterministic_data.get_read_instruction_for_host(
-      split=split,
-      dataset_info=info,
-      remainder_options=deterministic_data.RemainderOptions.ON_FIRST_PROCESS)
 
   # Split class names (last process gets remainder).
   if len(class_names) < jax.process_count():
@@ -140,8 +135,10 @@ def _split_and_batch(dataset_name, data_dir, class_names, batch_size, split,
   else:
     class_names = class_names[class_name_offset:class_name_offset + per_process]
 
-  ds_images, ds_texts = get_ds(builder.as_dataset(split=read_instruction),
-                               class_names, class_name_offset=class_name_offset)
+  ds_images, ds_texts = get_ds(
+      builder.as_dataset(split=tfds.split_for_jax_process(split)),
+      class_names,
+      class_name_offset=class_name_offset)
   return (
       _pad_and_batch(ds_images, batch_dims),
       _pad_and_batch(ds_texts, batch_dims),
@@ -179,13 +176,14 @@ class Evaluator:
                batch_size,
                dataset_names=DATASET_NAMES,
                data_dir=None,
-               class_names="dataset_info",
+               class_names="dataset_info:label",
                split="test",
                prompt_templates="clip_paper",
                canonicalize=True,
                pp_img="resize(224)|value_range(-1,1)",
                pp_txt="tokenize(max_len=16, eos='sticky', "
                       "pad_value=1, inkey='texts', outkey='labels')",
+               cache_final=False,
                filter_fn=None,
                first_class_name_only=True,
                batched_features_transform=lambda x: x,
@@ -217,6 +215,7 @@ class Evaluator:
       pp_txt: Preprocessing string for texts. Can expect "texts" key as an input
         (shape=[], dtype=string), and is expected to produce "labels" key that
         is suitable for the `text` argument of `predict_fn` input.
+      cache_final: Wether preprocesse dataset should be cached.
       filter_fn: Predicate to be applied to the dataset for filtering records.
       first_class_name_only: Whether only the first class name should be
         considered (i.e. not using any aliases).
@@ -224,7 +223,8 @@ class Evaluator:
         features before embedding the texts/images.
       dataset_overrides: Mapping `dataset_name` to an optional dictionary that
         can override parameters `dataset_name`, `data_dir`, `pp_img`, `pp_txt`,
-        `class_names`, `split`, and the extra `class_names_dataset_name`.
+        `class_names`, `split`, `filter_fn`, and the extra
+        `class_names_dataset_name`.
         Works with tuple/dict of tuples/dicts.
       async_delay: How many steps to wait before checking if all hosts have
         finished their batch. A value > 1 allows for more parallelized
@@ -250,6 +250,7 @@ class Evaluator:
           canonicalize=canonicalize)
       pp_img_ = overrides.pop("pp_img", pp_img)
       pp_txt_ = overrides.pop("pp_txt", pp_txt)
+      cache_final_ = overrides.pop("cache_final", cache_final)
       split_ = overrides.pop("split", split)
       filter_fn_ = overrides.pop("filter_fn", filter_fn)
       assert not overrides, f"Unknown overrides {dataset_name}: {overrides}"
@@ -266,6 +267,7 @@ class Evaluator:
               prepare_datasets,
               pp_img=pp_img_,
               pp_txt=pp_txt_,
+              cache_final=cache_final_,
               filter_fn=filter_fn_,
               prompt_templates=self.prompt_templates))
       self.datasets[dataset_name] = dict(
@@ -280,11 +282,17 @@ class Evaluator:
       return jnp.concatenate(
           jax.lax.all_gather(ztxt, axis_name=self._axis_name), axis=0)
 
-    def count_correct(params, return_embeddings, *, mask, label, image, ztxt):
+    def count_correct(params, return_embeddings, *, mask, labels, image, ztxt):
       """Returns count of correct predictions (and optionally embeddings)."""
       zimg, _, _ = predict_fn(params, image, None)
       best_txt = (zimg @ ztxt.T).argmax(axis=1)
-      correct = jnp.where(mask, best_txt == label, 0).sum()
+      # labels has format [[1, -1, -1], [5, -1, -1], [7, 2, -1], ...]
+      # so here we count "any" correct, such that the counting matches the
+      # multilabel scenario described in "are we done with imagenet"
+      # (http://arxiv.org/abs/2006.07159) section 3.1
+      assert labels.ndim == 2, labels.shape
+      matching = (best_txt[:, None] == labels).sum(axis=1)
+      correct = jnp.where(mask, (matching > 0).astype(jnp.int32), 0).sum()
       correct = jax.lax.psum(correct, axis_name=self._axis_name)
       if return_embeddings:
         zimg = jnp.concatenate(
@@ -376,9 +384,6 @@ class Evaluator:
     for batch in self.datasets[dataset_name]["images"]:
       batch = self._batched_features_transform(batch)
       batch = jax.tree_map(lambda x: np.asarray(memoryview(x)), batch)
-      assert not (batch["label"] < 0).any(), (
-          "Detected labels < 0 - make sure to evaluate on a split with known"
-          "labels!")
 
       # Due to infinite padding, this loop will never end. We will stop once
       # all processes only process padded data. Checking ns[-k] instead of
@@ -387,11 +392,15 @@ class Evaluator:
       if len(ns) >= self._async_delay and ns[-self._async_delay] == 0:
         break
 
+      labels = batch["label"]
+      if labels.ndim == 2:
+        labels = labels[..., None]
+      assert labels.ndim == 3
       correct_p, embs_p = self._count_correct_p(
           params,
           return_embeddings,
           mask=batch["mask"],
-          label=batch["label"],
+          labels=labels,
           image=batch["image"],
           ztxt=ztxt_p,
       )

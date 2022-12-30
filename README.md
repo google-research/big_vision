@@ -58,6 +58,9 @@ codebase:
   Xiaohua Zhai*, Xiao Wang*, Basil Mustafa*, Andreas Steiner*, Daniel Keysers,
   Alexander Kolesnikov, and Lucas Beyer*\
   Resources: [trainer](big_vision/trainers/proj/image_text/contrastive.py), [config](big_vision/configs/proj/image_text/lit_coco.py), [colab](https://colab.research.google.com/github/google-research/big_vision/blob/main/big_vision/configs/proj/image_text/lit.ipynb).
+- [Image-and-Language Understanding from Pixels Only](https://arxiv.org/abs/2212.08045), by
+  Michael Tschannen, Basil Mustafa, Neil Houlsby
+  Resources [readme](big_vision/configs/proj/clippo/README.md), [config](big_vision/configs/proj/clippo/train_clippo.py)
 
 ### Knowledge distillation
 
