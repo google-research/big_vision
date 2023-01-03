@@ -59,8 +59,8 @@ codebase:
   Alexander Kolesnikov, and Lucas Beyer*\
   Resources: [trainer](big_vision/trainers/proj/image_text/contrastive.py), [config](big_vision/configs/proj/image_text/lit_coco.py), [colab](https://colab.research.google.com/github/google-research/big_vision/blob/main/big_vision/configs/proj/image_text/lit.ipynb).
 - [Image-and-Language Understanding from Pixels Only](https://arxiv.org/abs/2212.08045), by
-  Michael Tschannen, Basil Mustafa, Neil Houlsby
-  Resources [readme](big_vision/configs/proj/clippo/README.md), [config](big_vision/configs/proj/clippo/train_clippo.py)
+  Michael Tschannen, Basil Mustafa, Neil Houlsby\
+  Resources: [readme](big_vision/configs/proj/clippo/README.md), [config](big_vision/configs/proj/clippo/train_clippo.py).
 
 ### Knowledge distillation
 
@@ -368,6 +368,7 @@ core code and configs are expected to work at head.
 | image_text | https://github.com/google-research/big_vision/commit/8921d5141504390a8a4f7b2dacb3b3c042237290 |
 | distill    | https://github.com/google-research/big_vision/commit/2f3f493af048dbfd97555ff6060f31a0e686f17f |
 | GSAM       | WIP                                                                                           |
+| CLIPPO     | https://github.com/google-research/big_vision/commit/fd2d3bd2efc9d89ea959f16cd2f58ae8a495cd44 |
 
 # Citing the codebase
 
