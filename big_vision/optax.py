@@ -94,7 +94,7 @@ def make(config, params, *, sched_kw):
     ]
 
   # Weight decay. Defaults to 0.0.
-  # Weight decay is not gradient-based but insted uses "params side-input".
+  # Weight decay is not gradient-based but instead uses "params side-input".
   # Hence, weight decay is additive and independent of previous gradient-based
   # updates.
   assert "weight_decay" not in config, "Deprecated option. Use wd and schedule."
