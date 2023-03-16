@@ -74,9 +74,14 @@ def get_config(arg=None):
   tokenizer = lambda inkey: (
       f'bert_tokenize(inkey="{inkey}", max_len={arg.token_len}, '
       f'vocab_path="{vocab_path}")')
-  config.input.pp = pp_eval = (
+  config.input.pp = (
       f'decode|resize({arg.res})|flip_lr|randaug(2,10)|value_range(-1,1)'
       f'|flatten|{tokenizer("captions/text")}|keep("image", "labels")'
+  )
+  pp_eval = (
+      f'decode|resize({arg.res})|value_range(-1,1)'
+      f'|flatten|{tokenizer("captions/text")}'
+      '|keep("image", "labels")'
   )
   config.pp_modules = [
       'ops_general', 'ops_image', 'ops_text', 'proj.flaxformer.bert_ops']
