@@ -1,4 +1,4 @@
-# Copyright 2022 Big Vision Authors.
+# Copyright 2023 Big Vision Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -103,19 +103,19 @@ def load(init_params, init_files, model_cfg, img_load_kw={}, txt_load_kw={}):  #
   else:
     init_files = {**init_files}  # Shallow copy because we'll pop stuff off.
 
-  restored_params = {**init_params}
+  restored_params = {**init_params} if init_params else {}
 
   img_init = init_files.pop("image", init_files.pop("img", None))
   if img_init:
     restored_params["img"] = importlib.import_module(
         f"big_vision.models.{model_cfg.get('image_model', 'vit')}"
-    ).load(init_params["img"], img_init, model_cfg.image, **img_load_kw)
+    ).load(init_params.get("img"), img_init, model_cfg.image, **img_load_kw)
 
   txt_init = init_files.pop("text", init_files.pop("txt", None))
   if txt_init:
     restored_params["txt"] = importlib.import_module(
         f"big_vision.models.{model_cfg.get('text_model', 'proj.image_text.text_transformer')}"  # pylint: disable=line-too-long
-    ).load(init_params["txt"], txt_init, model_cfg.text, **txt_load_kw)
+    ).load(init_params.get("txt"), txt_init, model_cfg.text, **txt_load_kw)
 
   t_init = init_files.pop("temperature", init_files.pop("t", None))
   if t_init:
