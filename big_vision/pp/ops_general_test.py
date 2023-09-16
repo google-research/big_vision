@@ -1,4 +1,4 @@
-# Copyright 2022 Big Vision Authors.
+# Copyright 2023 Big Vision Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -105,7 +105,24 @@ class PreprocessOpsTest(tf.test.TestCase):
           pp.get_pad_to_shape(desired_shape, pad_value=-1, key="x"), data):
         self.assertEqual(
             tf.reduce_sum(out["x"]),
-            2 * np.product(input_shape) - np.product(desired_shape))
+            2 * np.prod(input_shape) - np.prod(desired_shape))
+
+  def test_pad_to_shape_none(self):
+    data = {"x": tf.ones((8, 4), dtype=tf.float32)}
+    for out in self.tfrun(
+        pp.get_pad_to_shape((None, 6), pad_value=-1, key="x"), data):
+      self.assertEqual(out["x"].shape, (8, 6))
+      self.assertEqual(tf.reduce_sum(out["x"]), 8*4 - 8*2)
+
+  def test_pad_to_shape_which_side(self):
+    data = {"x": tf.ones((8, 4), dtype=tf.float32)}
+    for where, idxs in [("before", [0]), ("both", [0, -1]), ("after", [-1])]:
+      for out in self.tfrun(
+          pp.get_pad_to_shape((8, 6), key="x", where=where), data):
+        self.assertEqual(out["x"].shape, (8, 6))
+        self.assertEqual(tf.reduce_sum(out["x"]), 8*4)
+        for i in idxs:
+          self.assertEqual(out["x"][0, i], 0)
 
   def test_flatten(self):
     d = {"a": {"b": tf.constant([1, 2, 3])}, "c": "str"}
@@ -113,6 +130,35 @@ class PreprocessOpsTest(tf.test.TestCase):
         "a/b": tf.constant([1, 2, 3]),
         "c": "str"
     })
+
+  def test_reshape(self):
+    data = {"image": tf.constant(np.zeros((8, 32 * 32 * 3)))}
+    for out in self.tfrun(pp.get_reshape(new_shape=(8, 32, 32, 3)), data):
+      self.assertAllEqual(out["image"].shape, [8, 32, 32, 3])
+
+  def test_choice(self):
+    data = {
+        "empty_f32": tf.constant([], tf.float32),
+        "one_f32": tf.constant([0.42], tf.float32),
+        "two_f32": tf.constant([3.14, 0.42], tf.float32),
+        "empty_str": tf.constant([], tf.string),
+        "one_str": tf.constant(["Hi"], tf.string),
+        "two_str": tf.constant(["Hi", "Lucas"], tf.string),
+    }
+    self.assertEqual(
+        pp.get_choice(inkey="empty_f32", outkey="choice")(data)["choice"], 0.0)
+    self.assertEqual(
+        pp.get_choice(inkey="empty_str", outkey="choice")(data)["choice"], "")
+    self.assertEqual(
+        pp.get_choice(inkey="one_f32", outkey="choice")(data)["choice"], 0.42)
+    self.assertEqual(
+        pp.get_choice(inkey="one_str", outkey="choice")(data)["choice"], "Hi")
+    self.assertIn(
+        pp.get_choice(inkey="two_f32", outkey="choice")(data)["choice"],
+        [3.14, 0.42])
+    self.assertIn(
+        pp.get_choice(inkey="two_str", outkey="choice")(data)["choice"],
+        ["Hi", "Lucas"])
 
 if __name__ == "__main__":
   tf.test.main()
