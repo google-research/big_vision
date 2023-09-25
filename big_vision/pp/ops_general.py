@@ -1,4 +1,4 @@
-# Copyright 2022 Big Vision Authors.
+# Copyright 2023 Big Vision Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -206,12 +206,23 @@ def get_rag_tensor():
 
 @Registry.register("preprocess_ops.pad_to_shape")
 @utils.InKeyOutKey()
-def get_pad_to_shape(shape, pad_value=0):
+def get_pad_to_shape(shape, pad_value=0, where="after"):
   """Pads tensor to specified `shape`."""
+
+  def _pads(cur, tgt):
+    if tgt is None:
+      return [0, 0]
+    diff = tgt - cur
+    return {
+        "before": [diff, 0],
+        "after": [0, diff],
+        "both": [diff // 2, diff - diff // 2],
+    }[where]
 
   def _pad_to_shape(x):
     assert len(x.shape.as_list()) == len(shape)
-    paddings = [[0, shape[i] - tf.shape(x)[i]] for i in range(len(shape))]
+    paddings = [_pads(tgt=shape[i], cur=tf.shape(x)[i])
+                for i in range(len(shape))]
     constant_value = tf.constant(pad_value, x.dtype)
     ret = tf.pad(x, paddings, constant_values=constant_value)
     ret.set_shape(shape)
@@ -229,3 +240,43 @@ def get_flatten():
     return dict(flat)
 
   return flatten
+
+
+@Registry.register("preprocess_ops.reshape")
+@utils.InKeyOutKey()
+def get_reshape(new_shape):
+  """Reshapes tensor to a given new shape.
+
+  Args:
+    new_shape: new shape for the tensor.
+
+  Returns:
+    A function for reshaping a tensor.
+
+  """
+
+  def _reshape(tensor):
+    """Reshapes a tensor to a given shape."""
+    dtype = tensor.dtype
+    tensor = tf.reshape(tensor, new_shape)
+    return tf.cast(tensor, dtype)
+
+  return _reshape
+
+
+@Registry.register("preprocess_ops.choice")
+@utils.InKeyOutKey()
+def get_choice(empty_fallback=None):
+  """Randomly takes one entry out of a tensor after flattening."""
+
+  def _choice(x):
+    x = tf.reshape(x, (-1,))  # Ensure it's a 1D array
+
+    # Append the fallback value so we gracefully handle empty cases.
+    x0 = tf.zeros(1, x.dtype) if empty_fallback is None else [empty_fallback]
+    x = tf.concat([x, x0], axis=0)
+
+    num_choices = tf.maximum(tf.shape(x)[0] - 1, 1)  # Don't sample x0.
+    return x[tf.random.uniform([], 0, num_choices, dtype=tf.int32)]
+
+  return _choice
