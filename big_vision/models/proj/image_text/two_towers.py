@@ -103,19 +103,21 @@ def load(init_params, init_files, model_cfg, img_load_kw={}, txt_load_kw={}):  #
   else:
     init_files = {**init_files}  # Shallow copy because we'll pop stuff off.
 
-  restored_params = {**init_params} if init_params else {}
+  if not init_params:  # Convenience to skip checks in colab.
+    init_params = {"img": None, "txt": None}
+  restored_params = {**init_params}
 
   img_init = init_files.pop("image", init_files.pop("img", None))
   if img_init:
     restored_params["img"] = importlib.import_module(
         f"big_vision.models.{model_cfg.get('image_model', 'vit')}"
-    ).load(init_params.get("img"), img_init, model_cfg.image, **img_load_kw)
+    ).load(init_params["img"], img_init, model_cfg.image, **img_load_kw)
 
   txt_init = init_files.pop("text", init_files.pop("txt", None))
   if txt_init:
     restored_params["txt"] = importlib.import_module(
         f"big_vision.models.{model_cfg.get('text_model', 'proj.image_text.text_transformer')}"  # pylint: disable=line-too-long
-    ).load(init_params.get("txt"), txt_init, model_cfg.text, **txt_load_kw)
+    ).load(init_params["txt"], txt_init, model_cfg.text, **txt_load_kw)
 
   t_init = init_files.pop("temperature", init_files.pop("t", None))
   if t_init:
