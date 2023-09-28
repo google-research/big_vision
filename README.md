@@ -63,7 +63,7 @@ codebase:
   Resources: [readme](big_vision/configs/proj/clippo/README.md), [config](big_vision/configs/proj/clippo/train_clippo.py), [colab](https://colab.research.google.com/github/google-research/big_vision/blob/main/big_vision/configs/proj/clippo/clippo_colab.ipynb).
 - [Sigmoid Loss for Language Image Pre-Training](https://arxiv.org/abs/2303.15343), by
   Xiaohua Zhai*, Basil Mustafa, Alexander Kolesnikov, Lucas Beyer*.
-  Resources: [colab and models](https://colab.research.google.com/github/google-research/big_vision/blob/main/big_vision/configs/proj/image_text/siglip.ipynb), code TODO.
+  Resources: [colab and models](https://colab.research.google.com/github/google-research/big_vision/blob/main/big_vision/configs/proj/image_text/SigLIP_demo.ipynb), code TODO.
 
 ### Knowledge distillation
 
