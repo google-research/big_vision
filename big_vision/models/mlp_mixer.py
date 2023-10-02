@@ -1,4 +1,4 @@
-# Copyright 2022 Big Vision Authors.
+# Copyright 2023 Big Vision Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -22,6 +22,7 @@ from big_vision.models import common
 
 import einops
 import flax.linen as nn
+import flax.training.checkpoints
 import jax
 import jax.numpy as jnp
 
@@ -137,7 +138,31 @@ def load(init_params, init_file, model_cfg, dont_load=()):
       "L-i21k/16": "gs://mixer_models/imagenet21k/Mixer-L_16.npz",
       # pylint: enable=line-too-long
   }.get(init_file, init_file)
-  restored_params = utils.load_params(None, init_file)
+  restored_params = utils.load_params(init_file)
+  restored_params = flax.training.checkpoints.convert_pre_linen(restored_params)
+
+  if "Mixer" in restored_params:
+    restored_params["pre_head_layer_norm"] = restored_params["Mixer"].pop(
+        "encoder_norm"
+    )
+    restored_params["stem"] = restored_params.pop("embedding")
+    def unflatten_dense(d):
+      return {
+          "Dense_0": {
+              "bias": d["bias1"].squeeze(),
+              "kernel": d["kernel1"].squeeze(),
+          },
+          "Dense_1": {
+              "bias": d["bias2"].squeeze(),
+              "kernel": d["kernel2"].squeeze(),
+          },
+      }
+    for k, v in restored_params["Mixer"].items():
+      assert k.startswith("encoderblock_"), k
+      v["token_mixing"] = unflatten_dense(v.pop("token_mixing_phase_0"))
+      v["channel_mixing"] = unflatten_dense(v.pop("channel_mixing_phase_0"))
+      restored_params["MixerBlock_" + k[len("encoderblock_"):]] = v
+    del restored_params["Mixer"]
 
   # possibly use the random init for some of the params (such as, the head).
   restored_params = common.merge_params(restored_params, init_params, dont_load)

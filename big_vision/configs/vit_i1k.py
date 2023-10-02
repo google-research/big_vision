@@ -1,4 +1,4 @@
-# Copyright 2022 Big Vision Authors.
+# Copyright 2023 Big Vision Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -14,6 +14,9 @@
 
 # pylint: disable=line-too-long
 r"""Pre-training ViT on ILSVRC-2012 as in https://arxiv.org/abs/2106.10270
+
+This config does NOT include regularization (dropout, stochastic depth), which
+was shown to help with B/32, B/16, L/16 models in the paper (Figure 4).
 
 This configuration makes use of the "arg" to get_config to select which model
 to run, so a few examples are given below:

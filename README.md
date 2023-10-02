@@ -20,6 +20,12 @@ work on feature requests or accept external contributions, unless they were
 pre-approved (ask in an issue first). For a well-supported transfer-only
 codebase, see also [vision_transformer](https://github.com/google-research/vision_transformer).
 
+Note that `big_vision` is quite dynamic codebase and, while we intend to keep
+the core code fully-functional at all times, we can not guarantee timely updates
+of the project-specific code that lives in the `.../proj/...` subfolders.
+However, we provide a [table](#project-specific-commits) with last known
+commits where specific projects were known to work.
+
 The following research projects were originally conducted in the `big_vision`
 codebase:
 
@@ -51,6 +57,13 @@ codebase:
   Kornblith*, Xiaohua Zhai*, Matthias Minderer*, Michael Tschannen*, Ibrahim
   Alabdulmohsin*, Filip Pavetic*\
   Resources: [readme](big_vision/configs/proj/flexivit/README.md), [configs](big_vision/configs/proj/flexivit).
+- [Dual PatchNorm](https://arxiv.org/abs/2302.01327), by Manoj Kumar, Mostafa Dehghani, Neil Houlsby.
+- [Getting ViT in Shape: Scaling Laws for Compute-Optimal Model Design](https://arxiv.org/abs/2305.13035), by
+  Ibrahim Alabdulmohsin*, Xiaohua Zhai*, Alexander Kolesnikov, Lucas Beyer*.
+- (partial) [Scaling Vision Transformers to 22 Billion Parameters](https://arxiv.org/abs/2302.05442), by
+  Mostafa Dehghani*, Josip Djolonga*, Basil Mustafa*, Piotr Padlewski*, Jonathan Heek*, *wow many middle authors*, Neil Houlsby*.
+- (partial) [Finite Scalar Quantization: VQ-VAE Made Simple](https://arxiv.org/abs/2309.15505), by
+  Fabian Mentzer, David Minnen, Eirikur Agustsson, Michael Tschannen.
 
 ### Multimodal research
 
@@ -64,21 +77,28 @@ codebase:
 - [Sigmoid Loss for Language Image Pre-Training](https://arxiv.org/abs/2303.15343), by
   Xiaohua Zhai*, Basil Mustafa, Alexander Kolesnikov, Lucas Beyer*\
   Resources: [colab and models](https://colab.research.google.com/github/google-research/big_vision/blob/main/big_vision/configs/proj/image_text/SigLIP_demo.ipynb), code TODO.
+- [A Study of Autoregressive Decoders for Multi-Tasking in Computer Vision](https://arxiv.org/abs/2303.17376), by
+  Lucas Beyer*, Bo Wan*, Gagan Madan*, Filip Pavetic*, Andreas Steiner*, Alexander Kolesnikov, André Susano Pinto, Emanuele Bugliarello, Xiao Wang, Qihang Yu, Liang-Chieh Chen, Xiaohua Zhai*.
+- [Image Captioners Are Scalable Vision Learners Too](https://arxiv.org/abs/2306.07915), by
+  Michael Tschannen*, Manoj Kumar*, Andreas Steiner*, Xiaohua Zhai, Neil Houlsby, Lucas Beyer*.
+- [Three Towers: Flexible Contrastive Learning with Pretrained Image Models](https://arxiv.org/abs/2305.16999), by Jannik Kossen, Mark Collier, Basil Mustafa, Xiao Wang, Xiaohua Zhai, Lucas Beyer, Andreas Steiner, Jesse Berent, Rodolphe Jenatton, Efi Kokiopoulou.
+- (partial) [PaLI: A Jointly-Scaled Multilingual Language-Image Model](https://arxiv.org/abs/2209.06794), by Xi Chen, Xiao Wang, Soravit Changpinyo, *wow so many middle authors*, Anelia Angelova, Xiaohua Zhai, Neil Houlsby, Radu Soricut.
+- (partial) [PaLI-3 Vision Language Models: Smaller, Faster, Stronger](https://arxiv.org/abs/2310.09199), by Xi Chen, Xiao Wang, Lucas Beyer, Alexander Kolesnikov, Jialin Wu, Paul Voigtlaender, Basil Mustafa, Sebastian Goodman, Ibrahim Alabdulmohsin, Piotr Padlewski, Daniel Salz, Xi Xiong, Daniel Vlasic, Filip Pavetic, Keran Rong, Tianli Yu, Daniel Keysers, Xiaohua Zhai, Radu Soricut.
 
-### Knowledge distillation
+### Training
 
 - [Knowledge distillation: A good teacher is patient and consistent](https://arxiv.org/abs/2106.05237), by
   Lucas Beyer*, Xiaohua Zhai*, Amélie Royer*, Larisa Markeeva*, Rohan Anil,
   and Alexander Kolesnikov*\
   Resources: [README](big_vision/configs/proj/distill/README.md), [trainer](big_vision/trainers/proj/distill/distill.py), [colab](https://colab.research.google.com/drive/1nMykzUzsfQ_uAxfj3k35DYsATnG_knPl?usp=sharing).
-
-### Training
-
 - [Sharpness-Aware Minimization for Efficiently Improving Generalization](https://arxiv.org/abs/2010.01412), by
   Pierre Foret, Ariel Kleiner, Hossein Mobahi, Behnam Neyshabur
-
 - [Surrogate Gap Minimization Improves Sharpness-Aware Training](https://arxiv.org/abs/2203.08065), by Juntang Zhuang, Boqing Gong, Liangzhe Yuan, Yin Cui, Hartwig Adam, Nicha Dvornek, Sekhar Tatikonda, James Duncan and Ting Liu \
   Resources: [trainer](big_vision/trainers/proj/gsam/gsam.py), [config](big_vision/configs/proj/gsam/vit_i1k_gsam_no_aug.py) [reproduced results](https://github.com/google-research/big_vision/pull/8#pullrequestreview-1078557411)
+- [Tuning computer vision models with task rewards](https://arxiv.org/abs/2302.08242), by
+  André Susano Pinto*, Alexander Kolesnikov*, Yuge Shi, Lucas Beyer, Xiaohua Zhai.
+- (partial) [VeLO: Training Versatile Learned Optimizers by Scaling Up](https://arxiv.org/abs/2211.09760) by
+  Luke Metz, James Harrison, C. Daniel Freeman, Amil Merchant, Lucas Beyer, James Bradbury, Naman Agrawal, Ben Poole, Igor Mordatch, Adam Roberts, Jascha Sohl-Dickstein.
 
 ### Misc
 
@@ -118,7 +138,7 @@ details, but generally speaking, running on a GPU machine involves calling
 `python -m COMMAND` while running on TPUs, including multi-host, involves
 
 ```
-gcloud alpha compute tpus tpu-vm ssh $NAME --zone=$ZONE --worker=all
+gcloud compute tpus tpu-vm ssh $NAME --zone=$ZONE --worker=all
   --command "bash big_vision/run_tpu.sh COMMAND"
 ```
 
@@ -273,7 +293,7 @@ The following command line will create TPU VMs with 32 cores,
 4 hosts.
 
 ```
-gcloud alpha compute tpus tpu-vm create $NAME --zone $ZONE --accelerator-type v3-32 --version v2-tf-stable
+gcloud compute tpus tpu-vm create $NAME --zone $ZONE --accelerator-type v3-32 --version tpu-ubuntu2204-base
 ```
 
 ## Install `big_vision` on TPU VMs
@@ -283,8 +303,8 @@ dependencies.
 
 ```
 git clone https://github.com/google-research/big_vision
-gcloud alpha compute tpus tpu-vm scp --recurse big_vision/big_vision $NAME: --zone=$ZONE --worker=all
-gcloud alpha compute tpus tpu-vm ssh $NAME --zone=$ZONE --worker=all --command "bash big_vision/run_tpu.sh"
+gcloud compute tpus tpu-vm scp --recurse big_vision/big_vision $NAME: --zone=$ZONE --worker=all
+gcloud compute tpus tpu-vm ssh $NAME --zone=$ZONE --worker=all --command "bash big_vision/run_tpu.sh"
 ```
 
 ## Download and prepare TFDS datasets
@@ -298,13 +318,13 @@ Specifically, the seven TFDS datasets used during evaluations will be generated
 under `~/tensorflow_datasets` on TPU machine with this command:
 
 ```
-gcloud alpha compute tpus tpu-vm ssh $NAME --zone=$ZONE --worker=0 --command "TFDS_DATA_DIR=~/tensorflow_datasets bash big_vision/run_tpu.sh big_vision.tools.download_tfds_datasets cifar10 cifar100 oxford_iiit_pet oxford_flowers102 cars196 dtd uc_merced"
+gcloud compute tpus tpu-vm ssh $NAME --zone=$ZONE --worker=0 --command "TFDS_DATA_DIR=~/tensorflow_datasets bash big_vision/run_tpu.sh big_vision.tools.download_tfds_datasets cifar10 cifar100 oxford_iiit_pet oxford_flowers102 cars196 dtd uc_merced"
 ```
 
 You can then copy the datasets to GS bucket, to make them accessible to all TPU workers.
 
 ```
-gcloud alpha compute tpus tpu-vm ssh $NAME --zone=$ZONE --worker=0 --command "rm -r ~/tensorflow_datasets/downloads && gsutil cp -r ~/tensorflow_datasets gs://$GS_BUCKET_NAME"
+gcloud compute tpus tpu-vm ssh $NAME --zone=$ZONE --worker=0 --command "rm -r ~/tensorflow_datasets/downloads && gsutil cp -r ~/tensorflow_datasets gs://$GS_BUCKET_NAME"
 ```
 
 If you want to integrate other public or custom datasets, i.e. imagenet2012,
@@ -322,8 +342,13 @@ The following command line fine-tunes a pre-trained `vit-i21k-augreg-b/32` model
 on `cifar10` dataset.
 
 ```
-gcloud alpha compute tpus tpu-vm ssh $NAME --zone=$ZONE --worker=all --command "TFDS_DATA_DIR=gs://$GS_BUCKET_NAME/tensorflow_datasets bash big_vision/run_tpu.sh big_vision.train --config big_vision/configs/transfer.py:model=vit-i21k-augreg-b/32,dataset=cifar10,crop=resmall_crop --workdir gs://$GS_BUCKET_NAME/big_vision/workdir/`date '+%m-%d_%H%M'` --config.lr=0.03"
+gcloud compute tpus tpu-vm ssh $NAME --zone=$ZONE --worker=all --command "TFDS_DATA_DIR=gs://$GS_BUCKET_NAME/tensorflow_datasets bash big_vision/run_tpu.sh big_vision.train --config big_vision/configs/transfer.py:model=vit-i21k-augreg-b/32,dataset=cifar10,crop=resmall_crop --workdir gs://$GS_BUCKET_NAME/big_vision/workdir/`date '+%m-%d_%H%M'` --config.lr=0.03"
 ```
+
+## Checkpointing on cloud
+
+In the past, we recommended writing checkpoints to a Google Cloud Bucket. With the latest update, this is very slow because of technical issues with the checkpointing format.
+We are working on a solution, but in the meantime, we have updated our instructions to write checkpoints to a local folder on the TPU machine. Don't forget to copy useful checkpoints elsewhere after training.
 
 ## Run the train script on TPU VMs
 
@@ -332,13 +357,13 @@ e.g. `imagenet2012` ([prepare the TFDS dataset](https://www.tensorflow.org/datas
 run the following command line.
 
 ```
-gcloud alpha compute tpus tpu-vm ssh $NAME --zone=$ZONE --worker=all --command "TFDS_DATA_DIR=gs://$GS_BUCKET_NAME/tensorflow_datasets bash big_vision/run_tpu.sh big_vision.train --config big_vision/configs/bit_i1k.py  --workdir gs://$GS_BUCKET_NAME/big_vision/workdir/`date '+%m-%d_%H%M'`"
+gcloud compute tpus tpu-vm ssh $NAME --zone=$ZONE --worker=all --command "TFDS_DATA_DIR=gs://$GS_BUCKET_NAME/tensorflow_datasets bash big_vision/run_tpu.sh big_vision.train --config big_vision/configs/bit_i1k.py  --workdir gs://$GS_BUCKET_NAME/big_vision/workdir/`date '+%m-%d_%H%M'`"
 ```
 
 ## Sometimes useful gcloud commands
 
-- Destroy the TPU machines: `gcloud alpha compute tpus tpu-vm delete $NAME --zone $ZONE`
-- Remove all big_vision-related folders on all hosts: `gcloud alpha compute tpus tpu-vm ssh $NAME --zone $ZONE --worker=all --command 'rm -rf ~/big_vision ~/bv_venv'`
+- Destroy the TPU machines: `gcloud compute tpus tpu-vm delete $NAME --zone $ZONE`
+- Remove all big_vision-related folders on all hosts: `gcloud compute tpus tpu-vm ssh $NAME --zone $ZONE --worker=all --command 'rm -rf ~/big_vision ~/bv_venv'`
 
 # ViT baseline
 

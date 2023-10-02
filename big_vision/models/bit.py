@@ -1,4 +1,4 @@
-# Copyright 2022 Big Vision Authors.
+# Copyright 2023 Big Vision Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -156,7 +156,7 @@ def fix_old_checkpoints(params):
 def load(init_params, init_file, model_cfg, dont_load=()):
   """Load init from checkpoint."""
   del model_cfg  # Unused
-  params = utils.load_params(None, init_file)
+  params = utils.load_params(init_file)
   params = common.merge_params(params, init_params, dont_load)
   params = fix_old_checkpoints(params)
   return params

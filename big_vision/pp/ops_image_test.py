@@ -1,4 +1,4 @@
-# Copyright 2022 Big Vision Authors.
+# Copyright 2023 Big Vision Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -46,6 +46,10 @@ class PreprocessOpsTest(tf.test.TestCase):
 
   def test_resize_small(self):
     for data in self.tfrun(pp.get_resize_small(240), get_image_data()):
+      self.assertEqual(data["image"].shape, (320, 240, 3))
+
+  def test_resize_long(self):
+    for data in self.tfrun(pp.get_resize_long(320), get_image_data()):
       self.assertEqual(data["image"].shape, (320, 240, 3))
 
   def test_inception_crop(self):

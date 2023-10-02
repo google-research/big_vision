@@ -1,4 +1,4 @@
-# Copyright 2022 Big Vision Authors.
+# Copyright 2023 Big Vision Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -20,11 +20,14 @@ import importlib
 from typing import Any, Callable
 
 import flax
+import jax
+import numpy as np
 
 
 def from_config(config, predict_fns,
                 write_note=lambda s: s,
-                get_steps=lambda key, cfg: cfg[f"{key}_steps"]):
+                get_steps=lambda key, cfg: cfg[f"{key}_steps"],
+                devices=None):
   """Creates a list of evaluators based on `config`."""
   evaluators = []
   specs = config.get("evals", {})
@@ -38,6 +41,7 @@ def from_config(config, predict_fns,
     pred_key = cfg.pop("pred", "predict")
     pred_kw = cfg.pop("pred_kw", None)
     prefix = cfg.pop("prefix", f"{name}/")
+    cfg.pop("skip_first", None)
     logsteps = get_steps("log", cfg)
     for typ in ("steps", "epochs", "examples", "percent"):
       cfg.pop(f"log_{typ}", None)
@@ -47,6 +51,20 @@ def from_config(config, predict_fns,
     cfg["batch_size"] = cfg.get("batch_size") or config.get("batch_size_eval") or config.get("input.batch_size") or config.get("batch_size")  # pylint: disable=line-too-long
 
     module = importlib.import_module(f"big_vision.evaluators.{module}")
+
+    if devices is not None:
+      cfg["devices"] = devices
+
+    api_type = getattr(module, "API", "pmap")
+    if api_type == "pmap" and "devices" in cfg:
+      raise RuntimeError(
+          "You are seemingly using the old pmap-based evaluator, but with "
+          "jit-based train loop, see (internal link) for more details.")
+    if api_type == "jit" and "devices" not in cfg:
+      raise RuntimeError(
+          "You are seemingly using new jit-based evaluator, but with "
+          "old pmap-based train loop, see (internal link) for more details.")
+
     try:
       predict_fn = predict_fns[pred_key]
     except KeyError as e:
@@ -83,3 +101,29 @@ class _CacheablePartial:
 
   def __call__(self, *args, **kwargs):
     return functools.partial(self.fn, **self.kwargs)(*args, **kwargs)
+
+
+@functools.partial(jax.pmap, axis_name="batch")
+def all_gather(x):
+  """Gathers variables across all replicas."""
+  return jax.lax.all_gather(x, axis_name="batch")
+
+
+@functools.partial(jax.pmap, axis_name="procs")
+def psum(x):
+  """Sums variables across all replicas."""
+  return jax.lax.psum(x, axis_name="procs")
+
+
+def global_sum(things):
+  """Sums things that are on the host, across all hosts."""
+  if jax.process_count() == 1:  # Avoids polluting donut's memory.
+    return things
+
+  # Put the thing on the first device, and zeros on all other (local) devices.
+  ndev = jax.local_device_count()
+  padrep = lambda x: np.array([x] + [np.zeros_like(x)] * (ndev - 1))
+
+  summed_things = psum(jax.tree_map(padrep, things))
+  # Now each device holds the global sum, just grab it from the first one.
+  return jax.tree_map(lambda x: np.array(x[0]), summed_things)

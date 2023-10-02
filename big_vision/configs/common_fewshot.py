@@ -1,4 +1,4 @@
-# Copyright 2022 Big Vision Authors.
+# Copyright 2023 Big Vision Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -18,12 +18,20 @@ import ml_collections as mlc
 
 
 def get_fewshot_lsr(target_resolution=224, resize_resolution=256,
-                    runlocal=False):
+                    runlocal=False, **kw):
   """Returns a standard-ish fewshot eval configuration."""
-  config = mlc.ConfigDict()
+  kw.setdefault('representation_layer', 'pre_logits')
+  kw.setdefault('shots', (1, 5, 10, 25))
+  kw.setdefault('l2_reg', 2.0 ** 10)
+  kw.setdefault('num_seeds', 3)
+  kw.setdefault('prefix', '')  # No prefix as we already use a/ z/ and zz/
+
+  # Backward-compatible default:
+  if not any(f'log_{x}' in kw for x in ['steps', 'percent', 'examples', 'epochs']):  # pylint: disable=line-too-long
+    kw['log_steps'] = 25_000
+
+  config = mlc.ConfigDict(kw)
   config.type = 'fewshot_lsr'
-  config.representation_layer = 'pre_logits'
-  config.log_steps = 25_000
   config.datasets = {
       'caltech': ('caltech101', 'train', 'test'),  # copybara:srtip
       'cars': ('cars196:2.1.0', 'train', 'test'),
@@ -37,12 +45,12 @@ def get_fewshot_lsr(target_resolution=224, resize_resolution=256,
   } if not runlocal else {
       'pets': ('oxford_iiit_pet', 'train', 'test'),
   }
-  config.pp_train = f'decode|resize({resize_resolution})|central_crop({target_resolution})|value_range(-1,1)|keep("image", "label")'
-  config.pp_eval = f'decode|resize({resize_resolution})|central_crop({target_resolution})|value_range(-1,1)|keep("image", "label")'
-  config.shots = (1, 5, 10, 25)
-  config.l2_reg = 2.0 ** 10
-  config.num_seeds = 3
+  config.pp_train = (f'decode|resize({resize_resolution})|'
+                     f'central_crop({target_resolution})|'
+                     f'value_range(-1,1)|keep("image", "label")')
+  config.pp_eval = (f'decode|resize({resize_resolution})|'
+                    f'central_crop({target_resolution})|'
+                    f'value_range(-1,1)|keep("image", "label")')
   config.display_first = [('imagenet', 10)] if not runlocal else [('pets', 10)]
-  config.prefix = ''  # No prefix as we do already prefix with a/ z/ and zz/
 
   return config

@@ -1,4 +1,4 @@
-# Copyright 2022 Big Vision Authors.
+# Copyright 2023 Big Vision Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -37,9 +37,9 @@ class DataSource(ds_core.DataSource):
     }
 
   @overrides.overrides
-  def get_tfdata(self, ordered=False):
+  def get_tfdata(self, ordered=False, *, process_split=True):
     return self.builder.as_dataset(
-        split=self.process_split,
+        split=self.process_split if process_split else self.split,
         shuffle_files=not ordered,
         read_config=tfds.ReadConfig(
             skip_prefetch=True,  # We prefetch after pipeline.

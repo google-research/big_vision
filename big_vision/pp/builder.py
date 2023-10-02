@@ -1,4 +1,4 @@
-# Copyright 2022 Big Vision Authors.
+# Copyright 2023 Big Vision Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -57,6 +57,7 @@ def get_preprocess_fn(pp_pipeline, log_data=True):
 
   def _preprocess_fn(data):
     """The preprocessing function that is returned."""
+    nonlocal log_data
 
     # Apply all the individual steps in sequence.
     if log_data:
@@ -71,6 +72,7 @@ def get_preprocess_fn(pp_pipeline, log_data=True):
 
     if log_data:
       logging.info("Data after pre-processing:\n%s", data)
+    log_data = False  # For eager&pygrain: only log first one of each pipeline.
     return data
 
   return _preprocess_fn

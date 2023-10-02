@@ -1,4 +1,4 @@
-# Copyright 2022 Big Vision Authors.
+# Copyright 2023 Big Vision Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -17,7 +17,7 @@
 if [ ! -d "bv_venv" ]
 then
   sudo apt-get update
-  sudo apt install -y python3.8-venv
+  sudo apt install -y python3-venv
   python3 -m venv bv_venv
   . bv_venv/bin/activate
 

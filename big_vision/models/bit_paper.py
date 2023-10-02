@@ -1,4 +1,4 @@
-# Copyright 2022 Big Vision Authors.
+# Copyright 2023 Big Vision Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -14,7 +14,7 @@
 
 """BiT models as in the paper (ResNet V2) w/ loading of public weights.
 
-See reproduction proof: http://(internal link)
+See reproduction proof: http://(internal link)/qY70qs6j944
 """
 
 import functools
@@ -130,7 +130,8 @@ class Model(nn.Module):
   """ResNetV2."""
   num_classes: Optional[int] = None
   width: int = 1
-  depth: Union[int, Sequence[int]] = 50  # 5/101/152, or list of block depths.
+  depth: Union[int, Sequence[int]] = 50  # 50/101/152, or list of block depths.
+  head_zeroinit: bool = True
 
   @nn.compact
   def __call__(self, image, *, train=False):
@@ -154,8 +155,8 @@ class Model(nn.Module):
 
     # Head
     if self.num_classes:
-      head = nn.Dense(self.num_classes, name='head',
-                      kernel_init=nn.initializers.zeros)
+      kw = {'kernel_init': nn.initializers.zeros} if self.head_zeroinit else {}
+      head = nn.Dense(self.num_classes, name='head', **kw)
       out['logits_2d'] = head(out['pre_logits_2d'])
       x = out['logits'] = head(out['pre_logits'])
 
@@ -198,7 +199,7 @@ def load(init_params, init_file, model_cfg, dont_load=()):
   else:
     fname = vanity.get(init_file, init_file)
 
-  params = u.load_params(None, fname)
+  params = u.load_params(fname)
   params = maybe_convert_big_transfer_format(params)
   return common.merge_params(params, init_params, dont_load)
 
