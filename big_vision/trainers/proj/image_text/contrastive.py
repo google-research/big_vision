@@ -1,4 +1,4 @@
-# Copyright 2022 Big Vision Authors.
+# Copyright 2023 Big Vision Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -17,6 +17,7 @@
 For models Like
 - LiT (https://arxiv.org/abs/2111.07991)
 - CLIP (https://arxiv.org/abs/2103.00020)
+- SigLIP (https://arxiv.org/abs/2303.15343)
 """
 # pylint: disable=consider-using-from-import
 import functools
@@ -56,10 +57,140 @@ flags.DEFINE_boolean("cleanup", default=False,
 jax.config.parse_flags_with_absl()
 
 
-def all_gather(z):
+def all_gather(z, roll=False, only_others=False):
   """All gather and flatten first two dims."""
-  gather_flat = lambda x: jnp.concatenate(jax.lax.all_gather(x, "batch"), 0)
+  def gather_flat(x):
+    x = jax.lax.all_gather(x, "batch")
+    if roll or only_others:
+      # Each device moves "its" chunk to the beginning. Simplies loss/acc calcs.
+      x = jnp.roll(x, -jax.lax.axis_index("batch"), axis=0)
+      if only_others:
+        x = x[1:]
+    return jnp.concatenate(x, 0)  # Fold in "device" and "batch" dims.
   return jax.tree_map(gather_flat, z)
+
+
+def softmax_loss(zimg, ztxt, temperature):
+  """Softmax loss following the CLIP paper. Factorized to reduce memory cost."""
+
+  def unidirectional_loss(z1, z2, t):
+    z2 = all_gather(z2, roll=True)
+    logits = jnp.dot(z1, z2.T) * t
+    # This a softmax across the larger gathered axis, taking advantage of the
+    # fact that positives are known to be on the diagonal.
+    loss = -(jnp.diag(logits) - jax.scipy.special.logsumexp(logits, axis=-1))
+    acc = jnp.argmax(logits, axis=1) == jnp.arange(z1.shape[0])
+    return loss.mean(), acc.mean()
+
+  extras = {}
+  loss = 0
+  for name, row, col in [("i2t", zimg, ztxt), ("t2i", ztxt, zimg)]:
+    loss_dir, acc_dir = unidirectional_loss(row, col, temperature)
+    loss += 0.5 * loss_dir
+    extras[f"{name}_acc"] = acc_dir
+    extras[f"{name}_loss"] = loss_dir
+
+  loss = jax.lax.pmean(loss, "batch")
+  return loss, extras
+
+
+def _avg_pos_logit(x_me):
+  return jnp.mean(jnp.diag(x_me))
+
+
+def _avg_neg_logit(x_me, x_ot=None):
+  nom = jnp.sum(x_me) - jnp.sum(jnp.diag(x_me))
+  den = x_me.size - len(x_me)
+  if x_ot is not None and x_ot.size:
+    nom += jnp.sum(x_ot)
+    den += x_ot.size
+  return nom / den
+
+
+def sigmoid_loss(zimg, ztxt, temperature, bias=0.0):
+  """Sigmoid loss from SigLIP: https://arxiv.org/abs/2303.15343."""
+  # Sigmoid loss. Since it's unidirectional, image embeddings stick to
+  # "me", i.e. the device they are computed on, and text embeddings travel.
+  ztxt_me = ztxt  # Text embeddings on my devices: (n, D)
+  ztxt_ot = all_gather(ztxt, only_others=True)  # Text emb from others: (N, D)
+
+  logits_me = jnp.dot(zimg, ztxt_me.T)  # (n, D) . (D, n) -> (n, n)
+  logits_ot = jnp.dot(zimg, ztxt_ot.T)  # (n, D) . (D, N) -> (n, N)
+  logits_me = logits_me * temperature + bias
+  logits_ot = logits_ot * temperature + bias
+
+  eye = jnp.eye(zimg.shape[0])
+  # Standard sigmoid computes everything twice, once assuming positive
+  # labels and once assuming negative ones. But here we know exactly where
+  # to find positives (on "me" diagonal) and negatives (everywhere else),
+  # so compute each one's loss only once:
+  m1_diag1 = -jnp.ones_like(logits_me) + 2 * eye
+  loglik_me = jax.nn.log_sigmoid(m1_diag1 * logits_me)
+  loglik_ot = jax.nn.log_sigmoid(-logits_ot)
+
+  # Normalize by npos per column, but that's one, so just sum.
+  nll_me = -loglik_me.sum(axis=-1)
+  nll_ot = -loglik_ot.sum(axis=-1)
+  l = nll_me.mean() + nll_ot.mean()  # == concat'ing me/ot along axis -1 above.
+
+  return l, {
+      # Only local device metrics for now, as last time I tried, there was
+      # some funny unimplemented business with jax.lax.pmin/pmax!
+      # So what's reported here is average of per-device min/max/avg.
+      "pos_min_logit": jnp.min(jnp.diag(logits_me)),
+      "pos_max_logit": jnp.max(jnp.diag(logits_me)),
+      "pos_avg_logit": _avg_pos_logit(logits_me),
+      "local_neg_min_logit": jnp.min(logits_me + 1e9 * eye),
+      "local_neg_max_logit": jnp.max(logits_me - 1e9 * eye),
+      "local_neg_avg_logit": _avg_neg_logit(logits_me),
+      "neg_min_logit": jnp.minimum(
+          jnp.min(logits_me + 1e9 * eye),
+          jnp.min(logits_ot) if logits_ot.size else jnp.inf),
+      "neg_max_logit": jnp.maximum(
+          jnp.max(logits_me - 1e9 * eye),
+          jnp.max(logits_ot) if logits_ot.size else -jnp.inf),
+      "neg_avg_logit": _avg_neg_logit(logits_me, logits_ot),
+  }
+
+
+def _gather_from_device(x, device_id, axis_name="batch"):
+  return jax.lax.psum((jax.lax.axis_index(axis_name) == device_id) * x,
+                      axis_name)
+
+
+def chunked_sigmoid_loss(zimg, ztxt, temperature, bias=0.0):
+  """Loss computation from section 3.1 of arxiv.org/abs/2303.15343."""
+
+  # Calculate loss for representations on this device, which includes positives.
+  logits_me = jnp.dot(zimg, ztxt.T)  # (n, D) . (D, n) -> (n, n)
+  logits_me = logits_me * temperature + bias
+  m1_diag1 = -jnp.ones_like(logits_me) + 2 * jnp.eye(zimg.shape[0])
+  loglik_me = jax.nn.log_sigmoid(m1_diag1 * logits_me)
+  nll_me = -loglik_me.sum(axis=-1).mean()
+
+  def negative_loss(ztxt_other_device):
+    logits_ot = jnp.dot(zimg, ztxt_other_device.T)  # (n, D) . (D, n) -> (n, n)
+    logits_ot = logits_ot * temperature + bias
+    loglik_ot = jax.nn.log_sigmoid(-logits_ot)
+    return -jnp.sum(loglik_ot, axis=-1).mean()
+
+  me = jax.lax.axis_index("batch")
+  # All other devices are negatives. Hot-potato swap ztxt across devices.
+  # Interestingly, ppermute based implementation was memory intensive, so using
+  # all-reduce to gather representations.
+  nll_others = 0
+  for device_id in range(jax.device_count()):
+    skip = jnp.not_equal(device_id, me)
+    nll_others += skip * negative_loss(_gather_from_device(ztxt, device_id))
+
+  eye = jnp.eye(zimg.shape[0])
+  return nll_me + nll_others, {
+      "pos_min_logit": jnp.min(jnp.diag(logits_me)),
+      "pos_max_logit": jnp.max(jnp.diag(logits_me)),
+      "pos_avg_logit": _avg_pos_logit(logits_me),
+      "local_neg_min_logit": jnp.min(logits_me + 1e9 * eye),
+      "local_neg_max_logit": jnp.max(logits_me - 1e9 * eye),
+      "local_neg_avg_logit": _avg_neg_logit(logits_me),}
 
 
 def main(argv):
@@ -181,18 +312,23 @@ def main(argv):
           {"params": params}, images, labels,
           train=True, rngs={"dropout": rng_model_local})
 
-      # Gather representations across cores for larger batch size for loss.
-      if config.get("loss_use_global_batch", False):
-        zimg, ztxt = all_gather((zimg, ztxt))
+      match config.get("loss_fn", "softmax"):
+        case "softmax":
+          l, l_extras = softmax_loss(zimg, ztxt, extras["t"])
+        case "sigmoid":
+          l, l_extras = sigmoid_loss(zimg, ztxt, extras["t"], bias=extras["b"])
+        case "chunked_sigmoid":
+          l, l_extras = chunked_sigmoid_loss(zimg, ztxt, extras["t"],
+                                             bias=extras["b"])
+        case _:
+          raise NotImplementedError(f"Unrecognized loss {config.loss_fn=}")
 
-      l, l_extras = u.bidirectional_contrastive_loss(
-          zimg, ztxt, extras["t"], reduction=True)
       return l, {
           "t": extras["t"],
           "t/parameter": extras["t/parameter"],
-          "nimg": jnp.mean(extras["img/norm"]),
-          "ntxt": jnp.mean(extras["txt/norm"]),
-          **l_extras,
+          "train/nimg": jnp.mean(extras["img/norm"]),
+          "train/ntxt": jnp.mean(extras["txt/norm"]),
+          **{f"train/{k}": v for k, v in l_extras.items()},
       }
 
     (l, measurements), grads = jax.value_and_grad(
@@ -276,6 +412,19 @@ def main(argv):
 
   write_note(f"First step compilations...\n{u.chrono.note}")
 
+  # Note that training can be pre-empted during the final evaluation (i.e.
+  # just after the final checkpoint has been written to disc), in which case we
+  # want to run the evals.
+  if first_step in (total_steps, 0):
+    mw.step_start(first_step)
+    for (name, evaluator, _, prefix) in evaluators():
+      if config.evals[name].get("skip_first") and first_step != total_steps:
+        continue
+      write_note(f"{name} evaluation...\n{u.chrono.note}")
+      with u.chrono.log_timing(f"z/secs/eval/{name}"):
+        for key, value in evaluator.run(params_repl):
+          mw.measure(f"{prefix}{key}", value)
+
   # Using a python integer for step here, because opt.state.step is allocated
   # on TPU during replication.
   for step, batch in zip(range(first_step + 1, total_steps + 1), train_iter):
@@ -326,8 +475,7 @@ def main(argv):
       u.chrono.resume()
 
     for (name, evaluator, log_steps, prefix) in evaluators():
-      if u.itstime(step, log_steps, total_steps, first=log_steps < total_steps,
-                   last=False):
+      if u.itstime(step, log_steps, total_steps, first=False, last=True):
         u.chrono.pause(wait_for=params_repl)
         u.chrono.tick(step)  # Record things like epoch number, core hours etc.
         write_note(f"{name} evaluation...\n{u.chrono.note}")
@@ -336,16 +484,6 @@ def main(argv):
             mw.measure(f"{prefix}{key}", value)
         u.chrono.resume()
     mw.step_end()
-
-  # Run evals after done with training. Running them here guarantees evals
-  # will run if job is restarted after writting the last checkpoint and
-  # also supports eval only runs (when total_steps or num_epochs is 0).
-  mw.step_start(total_steps)
-  for (name, evaluator, _, prefix) in evaluators():
-    write_note(f"{name} evaluation...\n{u.chrono.note}")
-    with u.chrono.log_timing(f"z/secs/eval/{name}"):
-      for key, value in evaluator.run(params_repl):
-        mw.measure(f"{prefix}{key}", value)
 
   # Always give a chance to stop the profiler, no matter how things ended.
   # TODO: can we also do this when dying of an exception like OOM?
