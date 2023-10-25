@@ -1,4 +1,4 @@
-# Copyright 2022 Big Vision Authors.
+# Copyright 2023 Big Vision Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -35,11 +35,13 @@ import einops
 import flax
 import flax.jax_utils as flax_utils
 import jax
+from jax.experimental.array_serialization import serialization as array_serial
 import jax.numpy as jnp
 import ml_collections as mlc
 import numpy as np
 
 import tensorflow.io.gfile as gfile  # pylint: disable=consider-using-from-import
+
 
 Registry = pp_registry.Registry
 
@@ -80,14 +82,19 @@ def pad_shard_unpad(wrapped, static_argnums=(0,), static_argnames=()):
 
   def pad_shard_unpad_wrapper(*args, min_device_batch=None, **kw):
     d = jax.local_device_count()  # d = devices, b = batch
-    batch_sizes = (
-        {a.shape[0] for i, a in enumerate(args) if i not in static_argnums} |
-        {v.shape[0] for k, v in kw.items() if k not in static_argnames})
-    assert len(batch_sizes) == 1, f"Inconsistent batch-sizes: {batch_sizes}"
-    b = batch_sizes.pop()
 
-    def maybe_pad(x, actually_pad=True):
-      if not actually_pad: return x  # For call-site convenience below.
+    # Find the batch-sizes of all non-static arguments.
+    def get_bs(x):
+      batch_sizes = jax.tree_util.tree_map(lambda y: y.shape[0], x)
+      return jax.tree_util.tree_flatten(batch_sizes)[0]
+
+    bs_a = [get_bs(a) for i, a in enumerate(args) if i not in static_argnums]
+    bs_kw = [get_bs(v) for k, v in kw.items() if k not in static_argnames]
+    bs = set([n for b in (bs_a + bs_kw) for n in b])
+    assert len(bs) == 1, f"Inconsistent batch-sizes: {bs}"
+    b = bs.pop()
+
+    def pad(x):
       _, *shape = x.shape
       db, rest = divmod(b, d)
       if rest:
@@ -98,6 +105,10 @@ def pad_shard_unpad(wrapped, static_argnums=(0,), static_argnames=()):
             [x, np.zeros((d * (min_device_batch - db), *shape), x.dtype)])
         db = min_device_batch
       return x.reshape(d, db, *shape)
+
+    def maybe_pad(x, actually_pad=True):
+      if not actually_pad: return x  # For call-site convenience below.
+      return jax.tree_util.tree_map(pad, x)
 
     args = [maybe_pad(a, i not in static_argnums) for i, a in enumerate(args)]
     kw = {k: maybe_pad(v, k not in static_argnames) for k, v in kw.items()}
@@ -136,13 +147,13 @@ def npload(fname):
     return dict(loaded)
 
 
-def load_checkpoint(tree, npz):
+def load_checkpoint_np(npz, tree=None):
   """Loads a jax pytree from a npz file.
 
   Args:
+    npz: Either path to the checkpoint file (.npz), or a dict-like.
     tree: deprecated, use None.
       Bwd-compat for old format that only stored values: the pytree structure.
-    npz: Either path to the checkpoint file (.npz), or a dict-like.
 
   Returns:
     A pytree that is the checkpoint.
@@ -157,41 +168,54 @@ def load_checkpoint(tree, npz):
   return checkpoint
 
 
-def load_params(tree, npz):
-  """Loads a parameters from a npz checkpoint.
+def load_params(ckpt, **kw):
+  """Loads the parameters of a big_vision checkpoint, both old or new format.
 
   Args:
-    tree: deprecated, use None.
-      Bwd-compat for old format that only stored values: the pytree structure.
-    npz: Either path to the checkpoint file (.npz), or a dict-like.
+    ckpt: Path to the checkpoint (.npz, .ts) or dict-like.
+    **kw: forwarded to the underlying load function (_np or _ts).
 
   Returns:
-    A pytree that is the checkpoint.
+    A pytree that is the checkpoint, potentially sharded.
 
   Notes:
-    The filename can contain an indicator like `/path/to/file.npz:keyname`, in
-    which case ["opt"]["params"]["keyname"] will become ["opt"]["params"] in
-    the returned checkpoint. This allows ANY model that uses this function to
-    load itself from a checkpoint that contains multiple sub-models, such as
-    checkpoints generated from image_text or Distillation trainers.
+    The `ckpt` string can contain an colon-separated "submodel" indicator, like
+    `img` in the example `/path/to/file.npz:img`.
+    This is used to load sub-parts of a model, for example the image load the
+    image encoder out of a two_tower (SigLIP) checkpoint, or distillation.
+    This way, ANY model that uses this function can load itself from a
+    checkpoint that contains multiple sub-models.
   """
   key = None  # Whether we want to extract only a sub-key of the model.
-  if isinstance(npz, str):
-    if ((":" in npz and "://" not in npz) or  # Like /path/to/file:subtree_name
-        ("://" in npz and npz.count(":") == 2)):  # Like gs://path/to/file:sub
-      npz, key = npz.rsplit(":", 1)
-  checkpoint = load_checkpoint(tree, npz)
-  if "params" in checkpoint:
-    # Checkpoint with optax state (after cl/423007216).
-    params = checkpoint["params"]
-  elif "opt" in checkpoint:
-    # Checkpoint with Flax optimizer.
-    params = checkpoint["opt"]["target"]
-  else:
-    # When open-sourcing, we usually shared only the params directly.
-    params = checkpoint
+
+  if isinstance(ckpt, str):  # Most common case of passing a checkpoint path.
+    # Potentially read out the sub-part to load from after the colon
+    # '/path/to/file:img/head' => '/path/to/file', 'img/head'
+    # 'gs://path/to/file' => 'gs://path/to/file', None
+    ckpt, key = re.match(r"^(.*?/.*?)(?::([\w/]+))?$", ckpt).groups()  # pytype: disable=attribute-error
+
+    # Use the checkpoint filename to detect when we're loading old-style .npz
+    # checkpoints, as opposed to new-style tensorstore checkpoint folders.
+    if ckpt.endswith(".npz"):
+      checkpoint = load_checkpoint_np(ckpt, **kw)
+      if "params" in checkpoint:
+        # Checkpoint with optax state (after (internal link)).
+        params = checkpoint["params"]
+      elif "opt" in checkpoint:
+        # Checkpoint with Flax optimizer.
+        params = checkpoint["opt"]["target"]
+      else:
+        # When open-sourcing, we often shared only the params directly.
+        params = checkpoint
+    else:
+      # Here we're now loading new-style tensorstore checkpoints.
+      # We can be a more efficient and load params and `key` only right away.
+      checkpoint = load_checkpoint_ts(ckpt, regex=f"params/{key}/.*")
+      params = checkpoint["params"]
+
   if key is not None:
     params = tree_get(params, key)
+
   return params
 
 
@@ -221,7 +245,7 @@ def bidirectional_contrastive_loss(zimg, ztxt, t, mask=None, reduction=False):
     # under softmax, and be ignored by ncorrect (NINF will never win argmax).
     exclude = jnp.logical_not(mask)  # Now 1 if we don't want to keep.
     exclude = jnp.logical_or(exclude[:, None], exclude[None, :])
-    logits = jnp.where(exclude, jnp.NINF, logits)
+    logits = jnp.where(exclude, -jnp.inf, logits)
 
   # Note: assumed t is in a good range e.g. already passed through exp/softplus.
   l1 = -jnp.diag(jax.nn.log_softmax(logits, axis=1))  # NLL img->txt
@@ -284,7 +308,7 @@ def weighted_softmax_xent(*,
   normalizing_factor = labels.shape[1]
   if weights is not None:
     loss = loss * weights
-    normalizing_factor = weights.sum(axis=1)
+    normalizing_factor = jnp.clip(weights.sum(axis=1), 2e-38)
 
   loss = loss.sum(axis=1)
   if normalize:
@@ -351,6 +375,8 @@ def checkpointing_timeout(writer, timeout):
   # Make sure checkpoint writing is not a bottleneck
   if writer is not None:
     try:
+      # Note: `writer` is a multiprocessing.AsyncResult, and
+      # timeout is in seconds.
       writer.get(timeout=timeout)
     except multiprocessing.TimeoutError as e:
       raise TimeoutError(
@@ -368,7 +394,10 @@ def hms(s):
   if m < 60:
     return f"{m:.0f}m{s:.0f}s"
   h, m = divmod(m, 60)
-  return f"{h:.0f}h{m:.0f}m"  # Seconds intentionally omitted.
+  if h < 25:
+    return f"{h:.0f}h{m:.0f}m"  # Seconds intentionally omitted.
+  d, h = divmod(h, 24)
+  return f"{d:.0f}d{h:.0f}h{m:.0f}m"  # Seconds intentionally omitted.
 
 
 class Chrono:
@@ -487,8 +516,8 @@ class Chrono:
     self.note = f"Steps:{step}/{self.total_steps} [{step/self.total_steps:.1%}]"
     self.note += f"\nWalltime:{hms(self.accum_program_time)}"
     self.note += f" ({hms(self.accum_pause_time)} eval)"
-    self.note += f"\nETA:{hms(dt / steps_timed * steps_todo)}"
-    self.note += f"\nTotal train time:{hms(dt / steps_timed * self.total_steps)}"
+    self.note += f"\nETA:{hms(dt / steps_timed*steps_todo)}"
+    self.note += f"\nTotal train time:{hms(dt / steps_timed*self.total_steps)}"
     write_note(self.note)
 
     self.prev_time = now
@@ -512,10 +541,10 @@ class Chrono:
     )
 
   def load(self, ckpt={}):  # pylint: disable=dangerous-default-value
-    self.accum_program_time = ckpt.get("accum_program_time", 0.0)
-    self.accum_train_time = ckpt.get("accum_train_time", 0.0)
-    self.accum_pause_time = ckpt.get("accum_pause_time", 0.0)
-    self.accum_examples_seen = ckpt.get("accum_examples_seen", 0)
+    self.accum_program_time = float(ckpt.get("accum_program_time", 0.0))
+    self.accum_train_time = float(ckpt.get("accum_train_time", 0.0))
+    self.accum_pause_time = float(ckpt.get("accum_pause_time", 0.0))
+    self.accum_examples_seen = int(ckpt.get("accum_examples_seen", 0))
 
   @contextlib.contextmanager
   def log_timing(self, name, *, noop=False):
@@ -590,7 +619,7 @@ def tree_flatten_with_names(tree):
   Returns:
     A list of values with names: [(name, value), ...]
   """
-  vals, tree_def = jax.tree_flatten(tree)
+  vals, tree_def = jax.tree_util.tree_flatten(tree)
 
   # "Fake" token tree that is use to track jax internal tree traversal and
   # adjust our custom tree traversal to be compatible with it.
@@ -757,38 +786,6 @@ def recover_dtype(a):
     return a
 
 
-# Checkpoint names encode tree structure, you can check out this colab for an
-# example of how to recover tree structure from names:
-# (internal link)
-def save_checkpoint(checkpoint, path, step_copy=None, compressed=False):
-  """Util for checkpointing: saves jax pytree objects to the disk.
-
-  Args:
-    checkpoint: arbitrary jax pytree to be saved.
-    path: a path to save the checkpoint.
-    step_copy: creates a copy of the checkpoint with `path-{step_copy}` name.
-    compressed: whether to use np.savez or np.savez_compressed, useful if saving
-      large buffers that are easily compressed (e.g. repeated or integers).
-  """
-  names_and_vals, _ = tree_flatten_with_names(checkpoint)
-  io_buffer = io.BytesIO()
-
-  if compressed:
-    np.savez_compressed(io_buffer, **{k: v for k, v in names_and_vals})
-  else:
-    np.savez(io_buffer, **{k: v for k, v in names_and_vals})
-
-  # In order to be robust to interruptions we first save checkpoint to the
-  # temporal file and then move to actual path name.
-  path_tmp = path + "-TEMPORARY"
-  with gfile.GFile(path_tmp, "wb") as f:
-    f.write(io_buffer.getvalue())
-  gfile.rename(path_tmp, path, overwrite=True)
-
-  if step_copy is not None:
-    gfile.copy(path, f"{path}-{step_copy:09d}", overwrite=True)
-
-
 def recover_tree(keys, values):
   """Recovers a tree as a nested dict from flat names and values.
 
@@ -816,6 +813,139 @@ def recover_tree(keys, values):
     k_subtree, v_subtree = zip(*kv_pairs)
     tree[k] = recover_tree(k_subtree, v_subtree)
   return tree
+
+
+def tssave(mngr, pytree, path, on_commit=lambda *_, **__: None):
+  """Save pytree using jax tensorstore-based checkpoint manager.
+
+  NOTE: When overwriting an existing checkpoint with a different pytree, the
+  result is, counterintuitively, the union of both, not only the new one.
+
+  Args:
+    mngr: An instance of GlobalAsyncCheckpointManager.
+    pytree: What to store; any pytree of arrays.
+    path: Where to save the pytree. Creates subfolders as needed.
+    on_commit: A callback when writing is done, see `mngr.serialize`.
+  """
+  names, vals = zip(*tree_flatten_with_names(pytree)[0])
+
+  for name in names:
+    if "~" in name:
+      raise ValueError(f"Symbol '~' is not allowed in names. Found in {name}.")
+
+  gfile.makedirs(path)
+  with jax.transfer_guard("allow"):
+    names = [name.replace("/", "~") for name in names]
+    mngr.serialize_with_paths(
+        list(vals), [os.path.join(path, name) for name in names],
+        on_commit_callback=functools.partial(on_commit, array_names=names))
+
+
+def save_checkpoint_ts(mngr, checkpoint, path, step, keep=True):
+  """Preemption-safe saving of checkpoints using tssave."""
+  # The tensorstore checkpoint format is a folder with (potentially) many files.
+  # On some file-systems, operations on these (copy, rename, delete) are slow,
+  # so we implement a flow that's both robust to pre-emptions/crashes during
+  # checkpointing and makes minimal use of these slow operations.
+
+  # The logic goes as follows. It's infaillible :)
+  #       (...if file move is atomic, which it is.)
+  # We always write the current checkpoint to a new folder, which contains the
+  # step number in its name. If we don't need to keep it indefinitely, we append
+  # "-tmp" to its name.
+  # After writing the next checkpoint, we remove the previous one if it had
+  # "-tmp" in its name.
+  # We also have a -LAST file that contains a pointer to the latest complete
+  # checkpoint. File operations are cheap to make atomic, that's why.
+
+  def _on_commit_callback(array_names):  # Runs after writing ckpt is done.
+    with gfile.GFile(f"{path}-CUR", "w") as f:
+      f.write(curr)
+
+    last = ""
+    if gfile.exists(f"{path}-LAST"):
+      with gfile.GFile(f"{path}-LAST", "r") as f:
+        last = f.read()
+
+    gfile.rename(f"{path}-CUR", f"{path}-LAST", overwrite=True)
+
+    if last.endswith("-tmp"):
+      # If pre-emption happens here, some old checkpoints may not be deleted.
+      multiprocessing.pool.ThreadPool().map(
+          gfile.rmtree,
+          [f"{path}-{last}/{name}" for name in array_names])
+      gfile.rmtree(f"{path}-{last}")
+
+  # NOTE: The jax checkpoint manager automatically waits for the previous save
+  # to be finished before writing again, so we don't need to do it here.
+
+  # Always write to path with step number in it.
+  curr = f"{step:09d}{'-tmp' if not keep else ''}"
+  tssave(mngr, checkpoint, f"{path}-{curr}", _on_commit_callback)
+
+
+def load_checkpoint_ts(path, **tsload_kw):
+  """Loads a big_vision checkpoint saved by `save_checkpoint_ts`."""
+  to_load = path
+
+  try:
+    # When passing a general path (not a specific step), get the last available.
+    with gfile.GFile(f"{path}-LAST", "r") as f:
+      to_load = f"{path}-{f.read()}"
+  except Exception:  # Differs based on backend, so blanket catch. pylint:disable=broad-exception-caught
+    pass
+
+  return tsload(to_load, **tsload_kw)
+
+
+def tsload(path, *, tree=None, shardings=None, regex=None):
+  """Loads tensorstore-based array-tree from disk.
+
+  If `tree` argument is provided, then array names to load and target structure
+  is derived from the tree. If `tree` is None, then array names to load are
+  derived from array filenames on the disk, and, optionally, `regex` is applied
+  to filter these names. The`tree` argument is then automatically derived from
+  array names with `recover_tree` util.
+
+  Arrays are loaded to CPU/TPU/GPU memory as specified by the `shardings`
+  argument, which is a pytree of CPU/TPU/GPU shardings (can be mixed within a
+  single pytree). `shardings` should a prefix tree of the `tree` argument. We
+  automatically broadcast `shardings` to a full `tree`. For example, a user can
+  specify `shardings=jax.sharding.SingleDeviceSharing(jax.devices('cpu')[0])`,
+  which  will be broadcasted to a full tree.
+
+  Args:
+    path: a directory where the checkpoint arrays are stored.
+    tree: a target pytree, which defines array names to load and the target tree
+      structure. If tree is None, then `tree` is inferred from the names of
+      arrays stored on the disk.
+    shardings: a prefix pytree (with respect to `tree`) of the target shardings.
+    regex: regex to filter array names from the disk, if `tree` is not provided.
+
+  Returns:
+    A pytree of loaded arrays that has the same structure as `shardings` arg.
+  """
+  if (tree is not None) and (regex is not None):
+    raise ValueError("If tree is specified, regex filtering is not allowed.")
+
+  if tree is None:
+    path_names = set([p.replace("~", "/") for p in gfile.listdir(path)])
+    regex = re.compile(regex) if regex is not None else re.compile(".*")
+    path_names = [p for p in path_names if regex.match(p)]
+    tree = recover_tree(path_names, [0] * len(path_names))
+
+  names_and_vals, tree_def = tree_flatten_with_names(tree)
+  names_to_load, _ = zip(*names_and_vals)
+
+  if shardings is None:
+    shardings = jax.sharding.SingleDeviceSharding(jax.devices("cpu")[0])
+  shardings = list(jax.tree_leaves(tree_broadcast(shardings, tree)))
+
+  names_to_load = [os.path.join(path, name.replace("/", "~"))
+                   for name in names_to_load]
+  specs = [array_serial.get_tensorstore_spec(n) for n in names_to_load]
+  arrays = array_serial.run_deserialization(shardings, specs)
+  return tree_def.unflatten(arrays)
 
 
 def steps(prefix, config, data_size=None, batch_size=None, total_steps=None,
@@ -848,7 +978,8 @@ def steps(prefix, config, data_size=None, batch_size=None, total_steps=None,
   """
   # Be helpful and make sure only match one of the following suffixes.
   suffixes = {"steps", "examples", "epochs", "percent"}
-  matches = {f"{prefix}_{s}" for s in suffixes if f"{prefix}_{s}" in config}
+  matches = {f"{prefix}_{s}" for s in suffixes if f"{prefix}_{s}" in config
+             and config[f"{prefix}_{s}"] is not None}
   # Note that steps=0 is also a valid value (e.g. to only run evaluators).
   assert len(matches) <= 1, f"Only one of '{matches}' should be defined."
 
@@ -948,50 +1079,27 @@ def create_learning_rate_schedule(
   return step_fn
 
 
-def mixup(rng, *things, p=0.1, fold_in=None, n=2, **more_things):
-  """Perform mixup https://arxiv.org/abs/1710.09412.
-
-  Args:
-    rng: The random key to use.
-    *things: further arguments are the arrays to be mixed.
-    p: the beta/dirichlet concentration parameter, typically 0.1 or 0.2.
-    fold_in: One of None, "host", "device", or "sample". Whether to sample a
-      global mixing coefficient, one per host, one per device, or one per
-      example, respectively. The latter is usually a bad idea.
-    n: with how many other images an image is mixed. Default mixup is n=2.
-    **more_things: further kwargs are arrays to be mixed.  See also (internal link)
-      for further experiments and investigations.
-
-  Returns:
-    A new rng key. A list of mixed *things. A dict of mixed **more_things.
-  """
-  rng, rng_m = jax.random.split(rng, 2)
-  if fold_in == "host":
-    rng_m = jax.random.fold_in(rng_m, jax.process_index())
-  elif fold_in in ("device", "sample"):
-    rng_m = jax.random.fold_in(rng_m, jax.lax.axis_index("batch"))
-  ashape = (len(things[0]),) if fold_in == "sample" else (1,)
-  alpha = jax.random.dirichlet(rng_m, jnp.array([p]*n), ashape)
-  # Sort alpha values in decreasing order. This avoids destroying examples when
-  # the concentration parameter p is very small, due to Dirichlet's symmetry.
-  alpha = -jnp.sort(-alpha, axis=-1)
-  def mix(batch):
-    if batch is None: return None  # For call-side convenience!
-    def mul(a, b):  # B * BHWC -> B111 * BHWC
-      return b * jnp.expand_dims(a, tuple(range(1, b.ndim)))
-    return sum(mul(alpha[:, i], jnp.roll(batch, i, axis=0)) for i in range(n))
-  return rng, map(mix, things), {k: mix(v) for k, v in more_things.items()}
+def get_mixup(rng, p):
+  """Perform mixup https://arxiv.org/abs/1710.09412."""
+  rng, rng_mixup = jax.random.split(rng)
+  a = jax.random.beta(rng_mixup, p, p)
+  a = jnp.maximum(a, 1.0 - a)  # see (internal link) for the context.
+  def _mixup(*things, **more_things):
+    mix = lambda thing: a * thing + (1 - a) * jnp.roll(thing, shift=1, axis=0)
+    return rng, *jax.tree_map(mix, (things, more_things))
+  return _mixup
 
 
-def _sync(x):
-  return jax.lax.psum(x, "i")
+# For backwards compatability with legacy code.
+def mixup(rng, *things, p, **more_things):
+  return get_mixup(rng, p)(*things, **more_things)
 
 
 def sync():
   """Syncs hosts and empties async computation queue."""
-  x = jnp.ones([jax.local_device_count()])
-  x = jax.device_get(jax.pmap(_sync, "i")(x))
-  assert x[0] == jax.device_count()
+  x = reshard(np.ones(jax.device_count()),
+              jax.sharding.PositionalSharding(jax.devices()))
+  jax.jit(jnp.sum)(x).block_until_ready()
 
 
 def check_and_compile_patterns(patterns):
@@ -1140,3 +1248,85 @@ def maybe_cleanup_workdir(workdir, cleanup, info):
       gfile.remove(os.path.join(workdir, ".."))
     except tf.errors.OpError:
       pass
+
+
+def tree_broadcast(prefix, target):
+  """Broadcasts a prefix tree to a full tree.
+
+  Input-output examples:
+  1. prefix: {"x": 10, "y": 20}
+     target: {"x": {"a": 1, "b": 2}, "y": 3}
+
+     Result: {"x": {"a": 10, "b": 10}, "y": 20}
+
+  2. prefix: 100
+     target: {"x": {"a": 1, "b": 2}, "y": 3}
+
+     Result: {"x": {"a": 100, "b": 100}, "y": 100}
+
+  3. prefix: {"x": 10}
+     target: {"x": {"a": 1, "b": 2}, "y": 3}
+
+     Result: ValueError
+
+  Args:
+    prefix: prefix pytree.
+    target: boradcast target for a prefix tree.
+
+  Returns:
+    prefix tree broadcasted to a target tree.
+  """
+  def _broadcast(leaf, subtree):
+    return jax.tree_map(lambda _: leaf, subtree)
+  return jax.tree_map(_broadcast, prefix, target)
+
+
+def reshard(tree, shardings):
+  """Take an arbitrarily* sharded pytree and shard it according to `shardings`.
+
+  This is a no-op for tree elements which are already sharded as requested.
+
+  *Arrays that are fully addressable (for example, CPU arrays) are assumed to be
+  identical (i.e. replicated) across hosts.
+
+  *It does not work if an element of `tree` is not fully-addressable, unless its
+  sharding is already consistent with the target sharding.
+  If this is needed, please ping lbeyer@ or akolesnikov@.
+
+  Args:
+    tree: a pytree of arrays.
+    shardings: a (prefix) pytree of jax array shardings.
+  Returns:
+    A pytree of global jax arrays that follows provided shardings.
+  """
+  def _make_global_arr(x, shard, shape):
+    # Avoid unnecessary copies and transfers:
+    if hasattr(x, "sharding") and x.sharding.is_equivalent_to(shard, len(shape)):  # pylint: disable=line-too-long
+      return x
+    if not getattr(x, "is_fully_addressable", True):
+      raise RuntimeError("Trying to reshard a non-fully-addressable array. "
+                         "Please see the doc-comment for detailed explanation.")
+    x = jax.device_get(x)  # Might be on local devices.
+    xs = [jax.device_put(x[s], device=d)
+          for d, s in shard.addressable_devices_indices_map(shape).items()]
+    return jax.make_array_from_single_device_arrays(shape, shard, xs)
+
+  shapes = jax.tree_map(np.shape, tree)
+  shardings = tree_broadcast(shardings, tree)
+  return jax.tree_map(_make_global_arr, tree, shardings, shapes)
+
+
+def put_cpu(x):
+  """Places array/pytree on a CPU device."""
+  return jax.device_put(x, jax.devices("cpu")[0])
+
+
+# TODO: remove this logic when the
+# issue is github fixed https://github.com/google/jax/issues/15600.
+def jit_cpu(**extra_kwargs):
+  def _decorator(fun):
+    def _wrapped(*args, **kwargs):
+      sh = jax.sharding.SingleDeviceSharding(jax.devices("cpu")[0])
+      return jax.jit(fun, **extra_kwargs, out_shardings=sh)(*args, **kwargs)
+    return _wrapped
+  return _decorator

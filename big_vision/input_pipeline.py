@@ -1,4 +1,4 @@
-# Copyright 2022 Big Vision Authors.
+# Copyright 2023 Big Vision Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -18,40 +18,52 @@ import functools
 import itertools
 import math
 
+from absl import logging
+from big_vision.datasets import sequence_packing
 import big_vision.datasets.core as ds_core
 import big_vision.pp.builder as pp_builder
 import big_vision.utils as u
 import einops
-import flax.jax_utils as flax_utils
 import jax
+from jax.sharding import NamedSharding
+from jax.sharding import PartitionSpec as P
+import numpy as np
 import tensorflow as tf
 
 
 def make_for_train(
     data, preprocess_fn, batch_size,
-    shuffle_buffer_size, cache_raw=False, filter_fn=None,
-    num_parallel_calls=100, prefetch=2):
+    shuffle_buffer_size, cache_raw=False,
+    num_parallel_calls=100, prefetch=2,
+    *,
+    pre_filter_fn=None, post_filter_fn=None,
+    pack=None,
+):
   """Makes an input pipeline for training."""
+  # Use data filtering at your own risk: the actual split sizes won't be known
+  # in advance, so epoch-based things won't work correctly.
 
   data = _add_tpu_host_options(data)
 
-  # Use data filtering at your own risk: the actual split sizes won't be known
-  # in advance, so many things can go wrong in the code.
-  if filter_fn:
-    data = data.filter(filter_fn)
-
+  data = data.filter(pre_filter_fn) if pre_filter_fn else data
   data = data.cache() if cache_raw else data
   data = data.repeat(None)  # repeat data indefinitely
   data = data.shuffle(shuffle_buffer_size) if shuffle_buffer_size else data
 
   data = data.map(preprocess_fn, num_parallel_calls=num_parallel_calls)
+  data = data.filter(post_filter_fn) if post_filter_fn else data
+
+  data = sequence_packing.pack_dataset(data, pack) if pack else data
+
   # Drop remainder makes shape fully static, so we can later use it if needed.
   if batch_size:
     data = data.batch(batch_size // jax.process_count(), drop_remainder=True)
-  return data.prefetch(prefetch)
+  if prefetch:  # None means autotune, but we never want that.
+    data = data.prefetch(prefetch)
+  return data
 
 
-def training(input_config):
+def training(input_config, prefetch=2):
   """Reads the data from a single dataset, or mixes it from multiple.
 
   The data is read either from one or mixed from multiple datasets, depending
@@ -60,11 +72,20 @@ def training(input_config):
   Args:
     input_config: Configures the input pipeline. See input_pipeline_test for
       examples.
+    prefetch: How many batches to prefetch. Don't make too big, 1-2 are good.
 
   Returns:
     A tuple containing (possibly mixed) tf.data.Dataset and a total number of
     training examples.
   """
+  def config_to_kw(config):
+    assert "filter_fn" not in config, "Deprecated; use `pre_filter_fn` instead."
+    return dict(
+        shuffle_buffer_size=config.get("shuffle_buffer_size"),
+        cache_raw=config.get("cache_raw", False),
+        pre_filter_fn=config.get("pre_filter_fn"),
+        post_filter_fn=config.get("post_filter_fn"),
+    )
 
   batch_size = input_config.batch_size
   # Handle separately the common case when no mixing happens.
@@ -74,42 +95,49 @@ def training(input_config):
         data=train_data.get_tfdata(ordered=False),
         batch_size=batch_size,
         preprocess_fn=pp_builder.get_preprocess_fn(input_config.get("pp")),
-        shuffle_buffer_size=input_config.get("shuffle_buffer_size"),
-        cache_raw=input_config.get("cache_raw", False),
-        filter_fn=input_config.get("filter_fn"),
+        prefetch=prefetch,
+        pack=input_config.get("pack"),
+        **config_to_kw(input_config)
     )
     return train_ds, train_data.total_examples
 
   datasets = []
   weights = []
-  ntraining_examples = 0
+  totals = []
 
   for dataset_name, weight in input_config.data.items():
     dataset = input_config[dataset_name]
     train_data = ds_core.get(**dataset.data)
-    ntraining_examples += train_data.total_examples
     dataset = make_for_train(
         data=train_data.get_tfdata(ordered=False),
         # Don't batch the data just yet, it will be done after
         # mixing the different datasets below.
         batch_size=None,
         preprocess_fn=pp_builder.get_preprocess_fn(dataset.get("pp")),
-        shuffle_buffer_size=dataset.get("shuffle_buffer_size"),
-        cache_raw=dataset.get("cache_raw", False),
-        filter_fn=dataset.get("filter_fn"),
+        prefetch=0,  # Prefetching each pipeline leads to huge OOMs.
+        **config_to_kw(input_config)
     )
     datasets.append(dataset)
     weights.append(weight)
+    totals.append(train_data.total_examples)
+
+  logging.info(
+      "NOTE: Total dataset mix size: %d\nContributions:\n%s", sum(totals),
+      "\n".join(f"{ds}: {n}" for ds, n in zip(input_config.data, totals))
+  )
 
   # Normalize the weights such that they sum up to 1.
   weights = [x / sum(weights) for x in weights]
 
   train_ds = tf.data.Dataset.sample_from_datasets(
       datasets, weights, stop_on_empty_dataset=True)
+  if input_config.get("pack"):
+    train_ds = sequence_packing.pack_dataset(train_ds, input_config.get("pack"))
   train_ds = train_ds.batch(
       input_config["batch_size"] // jax.process_count(), drop_remainder=True)
+  train_ds = train_ds.prefetch(prefetch)
 
-  return train_ds, ntraining_examples
+  return train_ds, sum(totals)
 
 
 # The pipeline below is used for evals in multi-{G,T}PU and multi-host settings.
@@ -185,15 +213,36 @@ def prefetch_iterator(it, n):
     enqueue(1)
 
 
+# Note that the order of global devices for sharding data is important and
+# should be compatible with device order used for models params, state, etc.
+def start_global(data, global_devices, n_prefetch=1):
+  """Starts the global input pipeline."""
+  def _shard(x):
+    mesh = jax.sharding.Mesh(global_devices, ("devices",))
+    sharding = NamedSharding(mesh, P("devices"))
+    local_ds = mesh.local_devices
+
+    x = np.asarray(memoryview(x))  # No-copy: http://shortn/_KM5whIEtWI
+    xs = jax.device_put(np.split(x, len(local_ds), axis=0), local_ds)
+
+    global_shape = (x.shape[0] * jax.process_count(), *x.shape[1:])
+    return jax.make_array_from_single_device_arrays(global_shape, sharding, xs)
+  it = (jax.tree_util.tree_map(_shard, elem) for elem in iter(data))
+  return prefetch_iterator(it, n_prefetch)
+
+
+##########################################################################
+# The code below is pmap-specific and is deprecated, please switch to jit.
+##########################################################################
+
+
 def shard_and_put(x, shard=True, put=True):
-  # pylint: disable=protected-access
-  x = x._numpy()  # avoids redundant copy when converting tf tensors to numpy.
+  x = np.asarray(memoryview(x))  # No-copy conversion: http://shortn/_KM5whIEtWI
   if shard:
     x = einops.rearrange(x, "(d l) ... -> d l ...", d=jax.local_device_count())
   if shard and put:  # Only works for pmap (for now).
-    x = jax.device_put_sharded(list(x), flax_utils._pmap_device_order())
+    x = jax.device_put_sharded(list(x), jax.local_devices())
   return x
-  # pylint: enable=protected-access
 
 
 def start_input_pipeline(data, n_prefetch=1, shard=True):

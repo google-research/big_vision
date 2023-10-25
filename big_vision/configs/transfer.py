@@ -1,4 +1,4 @@
-# Copyright 2022 Big Vision Authors.
+# Copyright 2023 Big Vision Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -148,11 +148,11 @@ def _set_imagenet_variants(config, h_res=448, l_res=384):
 def get_config(arg=None):
   """Config for adaptation."""
   arg = bvcc.parse_arg(arg, model='vit', dataset='cifar10', crop='resmall_crop',
-                       h_res=448, l_res=384, runlocal=False)
+                       h_res=448, l_res=384, batch_size=512, runlocal=False)
   config = mlc.ConfigDict()
 
   config.input = {}
-  config.input.batch_size = 512 if not arg.runlocal else 8
+  config.input.batch_size = arg.batch_size if not arg.runlocal else 8
   config.input.shuffle_buffer_size = 50_000 if not arg.runlocal else 100
 
   config.log_training_steps = 10

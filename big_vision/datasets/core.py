@@ -1,4 +1,4 @@
-# Copyright 2022 Big Vision Authors.
+# Copyright 2023 Big Vision Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -21,7 +21,7 @@ import importlib
 class DataSource:
   """The API that any data source should implement."""
 
-  def get_tfdata(self, ordered):
+  def get_tfdata(self, ordered, *, process_split=True):
     """Creates this data object as a tf.data.Dataset.
 
     This will be called separately in each process, and it is up to the dataset
@@ -30,6 +30,8 @@ class DataSource:
     Args:
       ordered: if True, the dataset should use deterministic ordering, if False
         it may have undefined ordering. Think of True == val, False == train.
+      process_split: if False then every process receives the entire dataset
+        (e.g.  for evaluators running in a single process).
 
     Returns:
       A tf.data.Dataset object.

@@ -1,4 +1,4 @@
-# Copyright 2022 Big Vision Authors.
+# Copyright 2023 Big Vision Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -17,6 +17,8 @@
 This is a basic variant of a training loop, good starting point for fancy ones.
 """
 # pylint: disable=consider-using-from-import
+# pylint: disable=logging-fstring-interpolation
+
 import functools
 import importlib
 import multiprocessing.pool
@@ -28,10 +30,16 @@ from absl import logging
 import big_vision.evaluators.common as eval_common
 import big_vision.input_pipeline as input_pipeline
 import big_vision.optax as bv_optax
+import big_vision.sharding as bv_sharding
 import big_vision.utils as u
 from clu import parameter_overview
 import flax
+import flax.linen as nn
 import jax
+from jax.experimental import mesh_utils
+from jax.experimental import multihost_utils
+from jax.experimental.array_serialization import serialization as array_serial
+from jax.experimental.shard_map import shard_map
 import jax.numpy as jnp
 from ml_collections import config_flags
 import numpy as np
@@ -39,8 +47,6 @@ import optax
 import tensorflow as tf
 
 from tensorflow.io import gfile
-
-# pylint: disable=logging-fstring-interpolation
 
 
 config_flags.DEFINE_config_file(
@@ -52,12 +58,35 @@ flags.DEFINE_boolean("cleanup", default=False,
 
 # Adds jax flags to the program.
 jax.config.parse_flags_with_absl()
+# Transfer guard will fail the program whenever that data between a host and
+# a device is transferred implicitly. This often catches subtle bugs that
+# cause slowdowns and memory fragmentation. Explicit transfers are done
+# with jax.device_put and jax.device_get.
+jax.config.update("jax_transfer_guard", "disallow")
+# Fixes design flaw in jax.random that may cause unnecessary d2d comms.
+jax.config.update("jax_threefry_partitionable", True)
 
 
 def main(argv):
   del argv
-  tf.config.experimental.set_visible_devices([], "GPU")
 
+  jax.distributed.initialize()
+
+  # Make sure TF does not touch GPUs.
+  tf.config.set_visible_devices([], "GPU")
+
+  # Consistent device order is important to ensure correctness of various train
+  # loop components, such as input pipeline, update step, evaluators. We use
+  # jax utils to infer device order that will be used throughout the program.
+  devices = mesh_utils.create_device_mesh((jax.device_count(),))
+
+################################################################################
+#                                                                              #
+#                                Set up logging                                #
+#                                                                              #
+################################################################################
+
+  # Set up work directory and print welcome message.
   config = flags.FLAGS.config
   workdir = flags.FLAGS.workdir
   logging.info(
@@ -68,7 +97,7 @@ def main(argv):
   save_ckpt_path = None
   if workdir:  # Always create if requested, even if we may not write into it.
     gfile.makedirs(workdir)
-    save_ckpt_path = os.path.join(workdir, "checkpoint.npz")
+    save_ckpt_path = os.path.join(workdir, "checkpoint.bv")
 
   # The pool is used to perform misc operations such as logging in async way.
   pool = multiprocessing.pool.ThreadPool()
@@ -77,14 +106,7 @@ def main(argv):
   for m in config.get("pp_modules", ["ops_general", "ops_image", "ops_text"]):
     importlib.import_module(f"big_vision.pp.{m}")
 
-  # This seed makes the Jax part of things (like model init) deterministic.
-  # However, full training still won't be deterministic, for example due to the
-  # tf.data pipeline not being deterministic even if we would set TF seed.
-  # See (internal link) for a fun read on what it takes.
-  rng = jax.random.PRNGKey(config.get("seed", 0))
-
-  # These functions do more stuff internally, for OSS release we mock them by
-  # trivial alternatives in order to minize disruptions in the code.
+  # Setup up logging and experiment manager.
   xid, wid = -1, -1
   fillin = lambda s: s
   def info(s, *a):
@@ -93,8 +115,15 @@ def main(argv):
     if jax.process_index() == 0:
       info("%s", note)
 
-  write_note("Initializing...")
+  mw = u.BigVisionMetricWriter(xid, wid, workdir, config)
 
+################################################################################
+#                                                                              #
+#                                Input Pipeline                                #
+#                                                                              #
+################################################################################
+
+  write_note("Initializing train dataset...")
   batch_size = config.input.batch_size
   if batch_size % jax.device_count() != 0:
     raise ValueError(f"Batch size ({batch_size}) must "
@@ -105,15 +134,7 @@ def main(argv):
        jax.local_device_count(), jax.device_count(),
        batch_size // jax.device_count())
 
-  # First thing after above sanity checks, so we can log "start" ticks.
-  mw = u.BigVisionMetricWriter(xid, wid, workdir, config)
-
-  write_note("Initializing train dataset...")
   train_ds, ntrain_img = input_pipeline.training(config.input)
-
-  # Start prefetching already.
-  n_prefetch = config.get("prefetch_to_device", 1)
-  train_iter = input_pipeline.start_input_pipeline(train_ds, n_prefetch)
 
   total_steps = u.steps("total", config, ntrain_img, batch_size)
   def get_steps(name, default=ValueError, cfg=config):
@@ -126,15 +147,21 @@ def main(argv):
   info("Running for %d steps, that means %f epochs",
        total_steps, total_steps * batch_size / ntrain_img)
 
-  write_note(f"Initializing {config.model_name} model...")
+  # Start input pipeline as early as possible.
+  n_prefetch = config.get("prefetch_to_device", 1)
+  train_iter = input_pipeline.start_global(train_ds, devices, n_prefetch)
+
+################################################################################
+#                                                                              #
+#                           Create Model & Optimizer                           #
+#                                                                              #
+################################################################################
+
+  write_note("Creating model...")
   model_mod = importlib.import_module(f"big_vision.models.{config.model_name}")
   model = model_mod.Model(
       num_classes=config.num_classes, **config.get("model", {}))
 
-  # We want all parameters to be created in host RAM, not on any device, they'll
-  # be sent there later as needed, otherwise we already encountered two
-  # situations where we allocate them twice.
-  @functools.partial(jax.jit, backend="cpu")
   def init(rng):
     bs = batch_size // jax.device_count()
     image_size = tuple(train_ds.element_spec["image"].shape[1:])
@@ -148,72 +175,130 @@ def main(argv):
 
     return params
 
+  # This seed makes the Jax part of things (like model init) deterministic.
+  # However, full training still won't be deterministic, for example due to the
+  # tf.data pipeline not being deterministic even if we would set TF seed.
+  # See (internal link) for a fun read on what it takes.
+  rng = jax.random.PRNGKey(u.put_cpu(config.get("seed", 0)))
+
+  write_note("Inferring parameter shapes...")
   rng, rng_init = jax.random.split(rng)
-  with u.chrono.log_timing("z/secs/init"):
-    params_cpu = init(rng_init)
+  params_shape = jax.eval_shape(init, rng_init)
+
+  write_note("Inferring optimizer state shapes...")
+  tx, sched_fns = bv_optax.make(config, params_shape, sched_kw=dict(
+      total_steps=total_steps, batch_size=batch_size, data_size=ntrain_img))
+  opt_shape = jax.eval_shape(tx.init, params_shape)
+  # We jit this, such that the arrays are created on the CPU, not device[0].
+  sched_fns_cpu = [u.jit_cpu()(sched_fn) for sched_fn in sched_fns]
 
   if jax.process_index() == 0:
-    num_params = sum(p.size for p in jax.tree_leaves(params_cpu))
-    parameter_overview.log_parameter_overview(params_cpu, msg="init params")
+    num_params = sum(np.prod(p.shape) for p in jax.tree_leaves(params_shape))
     mw.measure("num_params", num_params)
 
-  write_note(f"Initializing {config.optax_name} optimizer...")
-  tx, sched_fns = bv_optax.make(config, params_cpu, sched_kw=dict(
-      total_steps=total_steps, batch_size=batch_size, data_size=ntrain_img))
+################################################################################
+#                                                                              #
+#                               Shard & Transfer                               #
+#                                                                              #
+################################################################################
 
-  # We jit this, such that the arrays are created on the CPU, not device[0].
-  opt_cpu = jax.jit(tx.init, backend="cpu")(params_cpu)
-  sched_fns_cpu = [jax.jit(sched_fn, backend="cpu") for sched_fn in sched_fns]
+  # Currently we support a simple 1D mesh only, this may change in the future.
+  # 1D mesh is sufficient to implement data-parallel training, ZERO2 and
+  # fully-sharded data-parallel (fsdp) training.
+  write_note("Creating device mesh...")
+  mesh = jax.sharding.Mesh(devices, ("data",))
+  repl_sharding = jax.sharding.NamedSharding(mesh, jax.sharding.PartitionSpec())
 
-  @functools.partial(jax.pmap, axis_name="batch", donate_argnums=(0, 1))
-  def update_fn(params, opt, rng, images, labels):
+  write_note("Inferring shardings...")
+  params_sharding = bv_sharding.infer_sharding(
+      params_shape, mesh, axis_name="data",
+      strategy=config.get("param_sharding", "replicated"),
+      extra_strategy_args=config.get("param_sharding_args", {}))
+  opt_sharding = bv_sharding.infer_sharding(
+      opt_shape, mesh, axis_name="data",
+      strategy=config.get("optim_sharding", "replicated"),
+      extra_strategy_args=config.get("optim_sharding_args", {}))
+
+  write_note("Transferring train_state to devices...")
+  # RNG is always replicated
+  rng_init = u.reshard(rng_init, repl_sharding)
+
+  # Parameters and the optimizer are now global (distributed) jax arrays.
+  params = jax.jit(init, out_shardings=params_sharding)(rng_init)
+  opt = jax.jit(tx.init, out_shardings=opt_sharding)(params)
+
+  rng, rng_loop = jax.random.split(rng, 2)
+  rng_loop = u.reshard(rng_loop, repl_sharding)
+  del rng  # not used anymore, so delete it.
+
+  # At this point we have everything we need to form a train state. It contains
+  # all the parameters that are passed and updated by the main training step.
+  train_state_sharding = {
+      "params": params_sharding, "opt": opt_sharding, "rng": repl_sharding}
+  train_state = {
+      "params": params, "opt": opt, "rng": rng_loop}
+  del params, opt, rng_loop  # Delete to avoid memory leak or accidental reuse.
+
+  write_note("Logging parameter overview...")
+  parameter_overview.log_parameter_overview(
+      train_state["params"], msg="Init params",
+      include_stats="global", jax_logging_process=0)
+
+################################################################################
+#                                                                              #
+#                                 Update Step                                  #
+#                                                                              #
+################################################################################
+
+  @functools.partial(
+      jax.jit,
+      donate_argnums=(0,),
+      out_shardings=(train_state_sharding, repl_sharding))
+  def update_fn(train_state, batch):
     """Update step."""
 
-    measurements = {}
+    images, labels = batch["image"], batch["labels"]
 
+    rng = train_state["rng"]
     if config.get("mixup") and config.mixup.p:
-      rng, (images, labels), _ = u.mixup(rng, images, labels, **config.mixup)
+      # The shard_map below makes mixup run on every device independently and
+      # thus avoids unnecessary communication.
+      P = jax.sharding.PartitionSpec  # pylint: disable=invalid-name
+      sharded_mixup_fn = shard_map(
+          u.get_mixup(rng, config.mixup.p), mesh=mesh,
+          in_specs=P("data"), out_specs=(P(), P("data"), P("data")))
+      rng, (images, labels), _ = sharded_mixup_fn(images, labels)
 
     # Get device-specific loss rng.
     rng, rng_model = jax.random.split(rng, 2)
-    rng_model_local = jax.random.fold_in(rng_model, jax.lax.axis_index("batch"))
 
-    def loss_fn(params, images, labels):
+    def loss_fn(params):
       logits, _ = model.apply(
           {"params": params}, images,
-          train=True, rngs={"dropout": rng_model_local})
+          train=True, rngs={"dropout": rng_model})
       return getattr(u, config.get("loss", "sigmoid_xent"))(
           logits=logits, labels=labels)
 
-    l, grads = jax.value_and_grad(loss_fn)(params, images, labels)
-    l, grads = jax.lax.pmean((l, grads), axis_name="batch")
+    params, opt = train_state["params"], train_state["opt"]
+    loss, grads = jax.value_and_grad(loss_fn)(params)
     updates, opt = tx.update(grads, opt, params)
     params = optax.apply_updates(params, updates)
 
+    measurements = {"training_loss": loss}
     gs = jax.tree_leaves(bv_optax.replace_frozen(config.schedule, grads, 0.))
-    measurements["l2_grads"] = jnp.sqrt(sum([jnp.vdot(g, g) for g in gs]))
+    measurements["l2_grads"] = jnp.sqrt(sum([jnp.sum(g * g) for g in gs]))
     ps = jax.tree_leaves(params)
-    measurements["l2_params"] = jnp.sqrt(sum([jnp.vdot(p, p) for p in ps]))
+    measurements["l2_params"] = jnp.sqrt(sum([jnp.sum(p * p) for p in ps]))
     us = jax.tree_leaves(updates)
-    measurements["l2_updates"] = jnp.sqrt(sum([jnp.vdot(u, u) for u in us]))
+    measurements["l2_updates"] = jnp.sqrt(sum([jnp.sum(u * u) for u in us]))
 
-    return params, opt, rng, l, measurements
+    return {"params": params, "opt": opt, "rng": rng}, measurements
 
-  # We do not jit/pmap this function, because it is passed to evaluator that
-  # does it later. We output as many intermediate tensors as possible for
-  # maximal flexibility. Later `jit` will prune out things that are not needed.
-  def predict_fn(params, image):
-    logits, out = model.apply({"params": params}, image)
-    return logits, out
-
-  # Only initialize evaluators when they are first needed.
-  @functools.lru_cache(maxsize=None)
-  def evaluators():
-    return eval_common.from_config(
-        config, {"predict": predict_fn},
-        lambda s: write_note(f"Init evaluator: {s}…\n{u.chrono.note}"),
-        lambda key, cfg: get_steps(key, default=None, cfg=cfg),
-    )
+################################################################################
+#                                                                              #
+#                               Load Checkpoint                                #
+#                                                                              #
+################################################################################
 
   # Decide how to initialize training. The order is important.
   # 1. Always resumes from the existing checkpoint, e.g. resumes a finetune job.
@@ -221,56 +306,118 @@ def main(argv):
   # 3. Initialize model from something, e,g, start a fine-tuning job.
   # 4. Train from scratch.
   resume_ckpt_path = None
-  if save_ckpt_path and gfile.exists(save_ckpt_path):
+  if save_ckpt_path and gfile.exists(f"{save_ckpt_path}-LAST"):
     resume_ckpt_path = save_ckpt_path
   elif config.get("resume"):
     resume_ckpt_path = fillin(config.resume)
+
+  ckpt_mngr = None
+  if save_ckpt_path or resume_ckpt_path:
+    ckpt_mngr = array_serial.GlobalAsyncCheckpointManager()
+
   if resume_ckpt_path:
-    write_note("Resume training from checkpoint...")
-    checkpoint = {
-        "params": params_cpu,
-        "opt": opt_cpu,
-        "chrono": u.chrono.save(),
+    write_note(f"Resuming training from checkpoint {resume_ckpt_path}...")
+    shardings = {
+        **train_state_sharding,
+        "chrono": jax.tree_map(lambda _: repl_sharding,
+                               u.chrono.save()),
     }
-    checkpoint_tree = jax.tree_structure(checkpoint)
-    loaded = u.load_checkpoint(checkpoint_tree, resume_ckpt_path)
-    # bfloat16 type gets lost when data is saved to disk, so we recover it.
-    checkpoint = jax.tree_map(u.recover_dtype, loaded)
-    params_cpu, opt_cpu = checkpoint["params"], checkpoint["opt"]
-    u.chrono.load(checkpoint["chrono"])
+    loaded = u.load_checkpoint_ts(
+        resume_ckpt_path, tree=shardings, shardings=shardings)
+    train_state = {key: loaded[key] for key in train_state.keys()}
+
+    u.chrono.load(jax.device_get(loaded["chrono"]))
+    del loaded
   elif config.get("model_init"):
     write_note(f"Initialize model from {config.model_init}...")
-    params_cpu = model_mod.load(
-        params_cpu, config.model_init, config.get("model"),
+    # TODO: when updating the `load` API soon, do pass and request the
+    # full `train_state` from it. Examples where useful: VQVAE, BN.
+    train_state["params"] = model_mod.load(
+        train_state["params"], config.model_init, config.get("model"),
         **config.get("model_load", {}))
-    if jax.process_index() == 0:
-      parameter_overview.log_parameter_overview(
-          params_cpu, msg="restored params")
 
-  write_note("Kicking off misc stuff...")
-  first_step = bv_optax.get_count(opt_cpu)
+    # load has the freedom to return params not correctly sharded. Think of for
+    # example ViT resampling position embedings on CPU as numpy arrays.
+    train_state["params"] = u.reshard(
+        train_state["params"], train_state_sharding["params"])
+
+    parameter_overview.log_parameter_overview(
+        train_state["params"], msg="restored params",
+        include_stats="global", jax_logging_process=0)
+
+
+################################################################################
+#                                                                              #
+#                                 Setup Evals                                  #
+#                                                                              #
+################################################################################
+
+  # We do not jit/pmap this function, because it is passed to evaluator that
+  # does it later. We output as many intermediate tensors as possible for
+  # maximal flexibility. Later `jit` will prune out things that are not needed.
+  def eval_logits_fn(train_state, batch):
+    logits, out = model.apply({"params": train_state["params"]}, batch["image"])
+    return logits, out
+
+  def eval_loss_fn(train_state, batch):
+    logits, _ = model.apply({"params": train_state["params"]}, batch["image"])
+    loss_fn = getattr(u, config.get("loss", "sigmoid_xent"))
+    return {
+        "loss": loss_fn(logits=logits, labels=batch["labels"], reduction=False)
+    }
+
+  eval_fns = {
+      "predict": eval_logits_fn,
+      "loss": eval_loss_fn,
+  }
+
+  # Only initialize evaluators when they are first needed.
+  @functools.lru_cache(maxsize=None)
+  def evaluators():
+    return eval_common.from_config(
+        config, eval_fns,
+        lambda s: write_note(f"Init evaluator: {s}…\n{u.chrono.note}"),
+        lambda key, cfg: get_steps(key, default=None, cfg=cfg),
+        devices,
+    )
+
+  # At this point we need to know the current step to see whether to run evals.
+  write_note("Inferring the first step number...")
+  first_step_device = bv_optax.get_count(train_state["opt"], jittable=True)
+  first_step = int(jax.device_get(first_step_device))
   u.chrono.inform(first_step=first_step)
+
+  # Note that training can be pre-empted during the final evaluation (i.e.
+  # just after the final checkpoint has been written to disc), in which case we
+  # want to run the evals.
+  if first_step in (total_steps, 0):
+    write_note("Running initial or final evals...")
+    mw.step_start(first_step)
+    for (name, evaluator, _, prefix) in evaluators():
+      if config.evals[name].get("skip_first") and first_step != total_steps:
+        continue
+      write_note(f"{name} evaluation...\n{u.chrono.note}")
+      with u.chrono.log_timing(f"z/secs/eval/{name}"):
+        with mesh, nn.logical_axis_rules([("act_batch", "data")]):
+          for key, value in evaluator.run(train_state):
+            mw.measure(f"{prefix}{key}", value)
+
+################################################################################
+#                                                                              #
+#                                  Train Loop                                  #
+#                                                                              #
+################################################################################
+
   prof = None  # Keeps track of start/stop of profiler state.
 
-  write_note(f"Replicating...\n{u.chrono.note}")
-  params_repl = flax.jax_utils.replicate(params_cpu)
-  opt_repl = flax.jax_utils.replicate(opt_cpu)
-
-  rng, rng_loop = jax.random.split(rng, 2)
-  rngs_loop = flax.jax_utils.replicate(rng_loop)
-  ckpt_writer = None
-
-  write_note(f"First step compilations...\n{u.chrono.note}")
-
-  # Using a python integer for step here, because opt.state.step is allocated
-  # on TPU during replication.
+  write_note("Starting training loop, compiling the first step...")
   for step, batch in zip(range(first_step + 1, total_steps + 1), train_iter):
     mw.step_start(step)
 
     with jax.profiler.StepTraceAnnotation("train_step", step_num=step):
       with u.chrono.log_timing("z/secs/update0", noop=step > first_step + 1):
-        params_repl, opt_repl, rngs_loop, loss_value, measurements = update_fn(
-            params_repl, opt_repl, rngs_loop, batch["image"], batch["labels"])
+        with mesh, nn.logical_axis_rules([("act_batch", "data")]):
+          train_state, measurements = update_fn(train_state, batch)
 
     # On the first host, let's always profile a handful of early steps.
     if jax.process_index() == 0:
@@ -280,58 +427,48 @@ def main(argv):
     if (u.itstime(step, get_steps("log_training"), total_steps, host=0)
         or u.chrono.warmup and jax.process_index() == 0):
       for i, sched_fn_cpu in enumerate(sched_fns_cpu):
-        mw.measure(f"global_schedule{i if i else ''}", sched_fn_cpu(step - 1))
-      l = mw.measure("training_loss", loss_value[0])
+        mw.measure(f"global_schedule{i if i else ''}",
+                   sched_fn_cpu(u.put_cpu(step - 1)))
+      measurements = jax.device_get(measurements)
       for name, value in measurements.items():
-        mw.measure(name, value[0])
+        mw.measure(name, value)
       u.chrono.tick(step)
-      if not np.isfinite(l):
+      if not np.isfinite(measurements["training_loss"]):
         raise RuntimeError(f"The loss became nan or inf somewhere within steps "
                            f"[{step - get_steps('log_training')}, {step}]")
 
     # Checkpoint saving
-    if (save_ckpt_path and
-        (u.itstime(step, get_steps("ckpt", None), total_steps, host=0) or
-         u.itstime(step, get_steps("keep_ckpt", None), total_steps, host=0))):
-      u.chrono.pause(wait_for=(params_repl, opt_repl))
-      u.checkpointing_timeout(ckpt_writer, config.get("ckpt_timeout", 1))
-      # We need to transfer the weights over now or else we risk keeping them
-      # alive while they'll be updated in a future step, creating hard to debug
-      # memory errors (see (internal link)). Also, takes device 0's params only.
-      params_cpu = jax.tree_map(lambda x: np.array(x[0]), params_repl)
-      opt_cpu = jax.tree_map(lambda x: np.array(x[0]), opt_repl)
+    keep_ckpt_steps = get_steps("keep_ckpt", None) or total_steps
+    if save_ckpt_path and (
+        (keep := u.itstime(step, keep_ckpt_steps, total_steps, first=False))
+        or u.itstime(step, get_steps("ckpt", None), total_steps, first=True)
+    ):
+      u.chrono.pause(wait_for=train_state)
 
-      # Check whether we want to keep a copy of the current checkpoint.
-      copy_step = None
-      if u.itstime(step, get_steps("keep_ckpt", None), total_steps):
-        copy_step = step
+      # Copy because we add extra stuff to the checkpoint.
+      ckpt = {**train_state}
 
-      ckpt = {"params": params_cpu, "opt": opt_cpu, "chrono": u.chrono.save()}
-      ckpt_writer = pool.apply_async(
-          u.save_checkpoint, (ckpt, save_ckpt_path, copy_step))
+      # To save chrono state correctly and safely in a multihost setup, we
+      # broadcast the state to all hosts and convert it to a global array.
+      with jax.transfer_guard("allow"):
+        chrono_ckpt = multihost_utils.broadcast_one_to_all(u.chrono.save())
+      chrono_shardings = jax.tree_map(lambda _: repl_sharding, chrono_ckpt)
+      ckpt = ckpt | {"chrono": u.reshard(chrono_ckpt, chrono_shardings)}
+
+      u.save_checkpoint_ts(ckpt_mngr, ckpt, save_ckpt_path, step, keep)
       u.chrono.resume()
 
     for (name, evaluator, log_steps, prefix) in evaluators():
-      if u.itstime(step, log_steps, total_steps, first=log_steps < total_steps,
-                   last=False):
-        u.chrono.pause(wait_for=params_repl)
+      if u.itstime(step, log_steps, total_steps, first=False, last=True):
+        u.chrono.pause(wait_for=train_state)
         u.chrono.tick(step)  # Record things like epoch number, core hours etc.
         write_note(f"{name} evaluation...\n{u.chrono.note}")
         with u.chrono.log_timing(f"z/secs/eval/{name}"):
-          for key, value in evaluator.run(params_repl):
-            mw.measure(f"{prefix}{key}", value)
+          with mesh, nn.logical_axis_rules([("act_batch", "data")]):
+            for key, value in evaluator.run(train_state):
+              mw.measure(f"{prefix}{key}", jax.device_get(value))
         u.chrono.resume()
     mw.step_end()
-
-  # Run evals after done with training. Running them here guarantees evals
-  # will run if job is restarted after writting the last checkpoint and
-  # also supports eval only runs (when total_steps or num_epochs is 0).
-  mw.step_start(total_steps)
-  for (name, evaluator, _, prefix) in evaluators():
-    write_note(f"{name} evaluation...\n{u.chrono.note}")
-    with u.chrono.log_timing(f"z/secs/eval/{name}"):
-      for key, value in evaluator.run(params_repl):
-        mw.measure(f"{prefix}{key}", value)
 
   # Always give a chance to stop the profiler, no matter how things ended.
   # TODO: can we also do this when dying of an exception like OOM?
@@ -344,6 +481,9 @@ def main(argv):
   pool.close()
   pool.join()
   mw.close()
+
+  if ckpt_mngr:
+    ckpt_mngr.wait_until_finished()
 
   # Make sure all hosts stay up until the end of main.
   u.sync()

@@ -1,4 +1,4 @@
-# Copyright 2022 Big Vision Authors.
+# Copyright 2023 Big Vision Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -130,7 +130,14 @@ def autotype(x):
 
 def pack_arg(**kw):
   """Packs key-word args as a string to be parsed by `parse_arg()`."""
+  for v in kw.values():
+    assert ',' not in f'{v}', f"Can't use `,` in config_arg value: {v}"
   return ','.join([f'{k}={v}' for k, v in kw.items()])
+
+
+def arg(**kw):
+  """Use like `add(**bvcc.arg(res=256, foo=bar), lr=0.1)` to pass config_arg."""
+  return {'config_arg': pack_arg(**kw), **kw}
 
 
 def _get_field_ref(config_dict, field_name):

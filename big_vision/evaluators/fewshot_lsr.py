@@ -1,4 +1,4 @@
-# Copyright 2022 Big Vision Authors.
+# Copyright 2023 Big Vision Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -23,13 +23,19 @@ import big_vision.pp.builder as pp_builder
 import big_vision.utils as u
 import jax
 import jax.numpy as jnp
+from jax.sharding import NamedSharding as Sharding
+from jax.sharding import PartitionSpec as P
 import numpy as np
 
 BIAS_CONSTANT = 100.0
 
+# Temporary global flag to facilitate backwards compatability. Will be removed
+# by the end of year 2023.
+API = "jit"
+
 
 # Setup function for few-shot regression on CPU to avoid "polluting" the TPU.
-@functools.partial(jax.jit, backend="cpu", static_argnums=(2,))
+@u.jit_cpu(static_argnums=(2,))
 def _precompute_cache(x, y, num_classes):
   """Cache quantities to speed-up the computation of L2-regularized least-sq."""
   # Whiten
@@ -85,7 +91,7 @@ def _precompute_cache(x, y, num_classes):
   return cache
 
 
-@functools.partial(jax.jit, backend="cpu")
+@u.jit_cpu()
 def _eig_fewshot_acc_fn(cache, x_test, y_test, l2_reg):
   """Computes (x,y) linear regression accuracy on (x_test, y_test)."""
 
@@ -112,9 +118,8 @@ class Evaluator:
                representation_layer, datasets, shots, l2_reg,
                pp_train, pp_eval, display_first,
                num_seeds=3,
-               label_key="label", mask_key="_mask"):
-    self.repr_fn = self.get_representation_fn(
-        predict_fn, representation_layer)
+               label_key="label", mask_key="_mask", *,
+               devices):
     self.datasets = datasets
     self.shots = shots
     self.l2_reg = l2_reg
@@ -128,14 +133,17 @@ class Evaluator:
     self.label_key = label_key
     self.mask_key = mask_key
 
+    self.devices = devices
+    self.mesh = jax.sharding.Mesh(devices, ("devices",))
+    self.repr_fn = self.get_representation_fn(
+        predict_fn, representation_layer)
+
   def get_representation_fn(self, predict_fn, representation_layer):
-    @functools.partial(jax.pmap, axis_name="batch")
-    def _repr_fn(params, batch, labels, mask):
-      *_, out = predict_fn(params, **batch)
+    # `out_shardings=Sharding(self.mesh, P())` will "all_gather" the outputs.
+    @functools.partial(jax.jit, out_shardings=Sharding(self.mesh, P()))
+    def _repr_fn(train_state, batch, labels, mask):
+      *_, out = predict_fn(train_state, batch)
       rep = u.tree_get(out, representation_layer)
-      rep = jax.lax.all_gather(rep, "batch")
-      labels = jax.lax.all_gather(labels, "batch")
-      mask = jax.lax.all_gather(mask, "batch")
       return rep, labels, mask
     return _repr_fn
 
@@ -167,24 +175,20 @@ class Evaluator:
     """Compute representation for the whole dataset."""
     pre_logits_list = []
     labels_list = []
-    for batch, _ in zip(input_pipeline.start_input_pipeline(data, 0),
-                        range(steps)):
+    for batch, _ in zip(
+        input_pipeline.start_global(data, self.devices, 0), range(steps)):
       labels, mask = batch.pop(self.label_key), batch.pop(self.mask_key)
-      pre_logits, labels, mask = self.repr_fn(
-          params, batch, labels, mask)
-      # Shapes at this point are:
-      # pre_logits: (hosts, devices, global_batch, features)
-      # labels: (hosts, devices, global_batch)
-      # mask: (hosts, devices, global_batch)
-      mask = np.array(mask[0]).astype(bool)
-      pre_logits_list.append(np.array(pre_logits[0])[mask])
-      labels_list.append(np.array(labels[0])[mask])
+      pre_logits, labels, mask = jax.device_get(self.repr_fn(
+          params, batch, labels, mask))
+      mask = mask.astype(bool)
+      pre_logits_list.append(pre_logits[mask])
+      labels_list.append(labels[mask])
     pre_logits = np.concatenate(pre_logits_list, axis=0)
     labels = np.concatenate(labels_list, axis=0)
 
     return pre_logits, labels
 
-  def compute_fewshot_metrics(self, params, seed,
+  def compute_fewshot_metrics(self, train_state, seed,
                               dataset, train_split, test_split):
     """Compute few-shot metrics on one dataset."""
     if dataset in self._repr:
@@ -193,8 +197,8 @@ class Evaluator:
     else:
       train_ds, steps_tr, test_ds, steps_te, num_classes = self._get_dataset(
           dataset, train_split, test_split)
-      repr_train, labels_train = self._get_repr(params, train_ds, steps_tr)
-      repr_test, labels_test = self._get_repr(params, test_ds, steps_te)
+      repr_train, labels_train = self._get_repr(train_state, train_ds, steps_tr)
+      repr_test, labels_test = self._get_repr(train_state, test_ds, steps_te)
       self._repr[dataset] = (repr_train, labels_train,
                              repr_test, labels_test,
                              num_classes)
@@ -208,23 +212,25 @@ class Evaluator:
     for shots in self.shots:
       all_idx = [indices[:shots] for indices in class_indices]
       all_idx = np.concatenate(all_idx, axis=0)
-      x = repr_train[all_idx]
-      y = labels_train[all_idx]
+      x = u.put_cpu(repr_train[all_idx])
+      y = u.put_cpu(labels_train[all_idx])
+      repr_test, labels_test = u.put_cpu((repr_test, labels_test))
 
       # Note the code is optimized to solve multiple LSR tasks for changing l2
       # strength, even though we currently used the fixed l2_reg constant.
       cache = _precompute_cache(x, y, num_classes)
-      acc = _eig_fewshot_acc_fn(cache, repr_test, labels_test, self.l2_reg)
-      results[shots] = np.array(acc)
+      acc = _eig_fewshot_acc_fn(
+          cache, repr_test, labels_test, u.put_cpu(self.l2_reg))
+      results[shots] = jax.device_get(acc)
 
     return results
 
-  def run(self, params):
+  def run(self, train_state):
     """New API executed in terms of old API."""
     self._repr = {}
     for seed in range(self.num_seeds):
       for name, dataset_args in self.datasets.items():
-        result = self.compute_fewshot_metrics(params, seed, *dataset_args)
+        result = self.compute_fewshot_metrics(train_state, seed, *dataset_args)
         for shots, v in result.items():
           prefix = "a/" if (name, shots) in self.display_first else "z/"
           suffix = f"-seed-{seed}"

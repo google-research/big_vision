@@ -25,6 +25,7 @@ from big_vision.models import common
 import flax
 import flax.linen as nn
 import flax.training.checkpoints
+import jax
 import jax.numpy as jnp
 import numpy as np
 import scipy.ndimage
@@ -57,6 +58,7 @@ class MlpBlock(nn.Module):
   """Transformer MLP / feed-forward block."""
   mlp_dim: Optional[int] = None  # Defaults to 4x input dim
   dropout: float = 0.0
+  dtype_mm: str = "float32"
 
   @nn.compact
   def __call__(self, x, deterministic=True):
@@ -67,10 +69,10 @@ class MlpBlock(nn.Module):
     )
 
     n, l, d = x.shape  # pylint: disable=unused-variable
-    x = nn.Dense(self.mlp_dim or 4 * d, **inits)(x)
+    x = nn.Dense(self.mlp_dim or 4 * d, dtype=self.dtype_mm, **inits)(x)
     x = nn.gelu(x)
     x = nn.Dropout(rate=self.dropout)(x, deterministic)
-    x = nn.Dense(d, **inits)(x)
+    x = nn.Dense(d, dtype=self.dtype_mm, **inits)(x)
     return x
 
 
@@ -79,25 +81,32 @@ class Encoder1DBlock(nn.Module):
   mlp_dim: Optional[int] = None  # Defaults to 4x input dim
   num_heads: int = 12
   dropout: float = 0.0
+  dtype_mm: str = "float32"
 
   @nn.compact
   def __call__(self, x, deterministic=True):
     out = {}
+    x = nn.with_logical_constraint(x, ("act_batch", "act_len", "act_emb"))
     y = nn.LayerNorm()(x)
     y = out["sa"] = nn.MultiHeadDotProductAttention(
         num_heads=self.num_heads,
         kernel_init=nn.initializers.xavier_uniform(),
         deterministic=deterministic,
+        dtype=self.dtype_mm,
     )(y, y)
+    y = nn.with_logical_constraint(y, ("act_batch", "act_len", "act_emb"))
     y = nn.Dropout(rate=self.dropout)(y, deterministic)
     x = out["+sa"] = x + y
 
     y = nn.LayerNorm()(x)
     y = out["mlp"] = MlpBlock(
         mlp_dim=self.mlp_dim, dropout=self.dropout,
+        dtype_mm=self.dtype_mm,
     )(y, deterministic)
+    y = nn.with_logical_constraint(y, ("act_batch", "act_len", "act_emb"))
     y = nn.Dropout(rate=self.dropout)(y, deterministic)
     x = out["+mlp"] = x + y
+    x = nn.with_logical_constraint(x, ("act_batch", "act_len", "act_emb"))
     return x, out
 
 
@@ -107,18 +116,41 @@ class Encoder(nn.Module):
   mlp_dim: Optional[int] = None  # Defaults to 4x input dim
   num_heads: int = 12
   dropout: float = 0.0
+  scan: bool = False
+  remat_policy: str = "nothing_saveable"
+  dtype_mm: str = "float32"
 
   @nn.compact
   def __call__(self, x, deterministic=True):
     out = {}
 
-    # Input Encoder
-    for lyr in range(self.depth):
-      block = Encoder1DBlock(
-          name=f"encoderblock_{lyr}",
-          mlp_dim=self.mlp_dim, num_heads=self.num_heads, dropout=self.dropout)
-      x, out[f"block{lyr:02d}"] = block(x, deterministic)
-    out["pre_ln"] = x  # Alias for last block, but without the number in it.
+    if self.scan:
+      block = nn.remat(
+          Encoder1DBlock,
+          prevent_cse=False,
+          static_argnums=(-1,),
+          policy=getattr(jax.checkpoint_policies, self.remat_policy, None),
+          )
+      x, _ = nn.scan(block,
+                     variable_axes={"params": 0},
+                     split_rngs={"params": True, "dropout": True},
+                     in_axes=nn.broadcast,
+                     length=self.depth)(
+                         name="encoderblock",
+                         dtype_mm=self.dtype_mm,
+                         mlp_dim=self.mlp_dim,
+                         num_heads=self.num_heads,
+                         dropout=self.dropout)(x, deterministic)
+    else:
+      # Input Encoder
+      for lyr in range(self.depth):
+        block_cur = Encoder1DBlock(
+            name=f"encoderblock_{lyr}",
+            dtype_mm=self.dtype_mm,
+            mlp_dim=self.mlp_dim, num_heads=self.num_heads,
+            dropout=self.dropout)
+        x, out[f"block{lyr:02d}"] = block_cur(x, deterministic)
+      out["pre_ln"] = x  # Alias for last block, but without the number in it.
 
     return nn.LayerNorm(name="encoder_norm")(x), out
 
@@ -160,15 +192,21 @@ class _Model(nn.Module):
   dropout: float = 0.0
   pool_type: str = "gap"  # Can also be "map" or "tok"
   head_zeroinit: bool = True
+  scan: bool = False
+  # or "dots_with_no_batch_dims_saveable" for more speed (memory costly)
+  remat_policy: str = "nothing_saveable"
+  dtype_mm: str = "float32"
 
   @nn.compact
   def __call__(self, image, *, train=False):
     out = {}
 
+    image = jnp.asarray(image, self.dtype_mm)
+
     # Patch extraction
     x = out["stem"] = nn.Conv(
         self.width, self.patch_size, strides=self.patch_size,
-        padding="VALID", name="embedding")(image)
+        padding="VALID", name="embedding", dtype=self.dtype_mm)(image)
 
     n, h, w, c = x.shape
     x = jnp.reshape(x, [n, h * w, c])
@@ -189,6 +227,9 @@ class _Model(nn.Module):
         mlp_dim=self.mlp_dim,
         num_heads=self.num_heads,
         dropout=self.dropout,
+        scan=self.scan,
+        remat_policy=self.remat_policy,
+        dtype_mm=self.dtype_mm,
         name="Transformer")(
             x, deterministic=not train)
     encoded = out["encoded"] = x
@@ -246,10 +287,10 @@ def decode_variant(variant):
   return {
       # pylint:disable=line-too-long
       # Reference: Table 2 of https://arxiv.org/abs/2106.04560.
-      "width": {"Ti": 192, "S": 384, "M": 512, "B": 768, "L": 1024, "So400m": 1152, "H": 1280, "g": 1408, "G": 1664, "e": 1792}[v],
-      "depth": {"Ti": 12, "S": 12, "M": 12, "B": 12, "L": 24, "So400m": 27, "H": 32, "g": 40, "G": 48, "e": 56}[v],
-      "mlp_dim": {"Ti": 768, "S": 1536, "M": 2048, "B": 3072, "L": 4096, "So400m": 4304, "H": 5120, "g": 6144, "G": 8192, "e": 15360}[v],
-      "num_heads": {"Ti": 3, "S": 6, "M": 8, "B": 12, "L": 16, "So400m": 16, "H": 16, "g": 16, "G": 16, "e": 16}[v],
+      "width": {"mu": 32, "Ti": 192, "S": 384, "M": 512, "B": 768, "L": 1024, "So400m": 1152, "H": 1280, "g": 1408, "g-opt": 1536, "G": 1664, "G-opt": 1536, "e": 1792}[v],
+      "depth": {"mu": 1, "Ti": 12, "S": 12, "M": 12, "B": 12, "L": 24, "So400m": 27, "H": 32, "g": 40, "g-opt": 40, "G": 48, "G-opt": 48, "e": 56}[v],
+      "mlp_dim": {"mu": 128, "Ti": 768, "S": 1536, "M": 2048, "B": 3072, "L": 4096, "So400m": 4304, "H": 5120, "g": 6144, "g-opt": 6144, "G": 8192, "G-opt": 8192, "e": 15360}[v],
+      "num_heads": {"mu": 2, "Ti": 3, "S": 6, "M": 8, "B": 12, "L": 16, "So400m": 16, "H": 16, "g": 16, "g-opt": 16, "G": 16, "G-opt": 16, "e": 16}[v],
       # pylint:enable=line-too-long
       **patch
   }
@@ -270,7 +311,7 @@ def resample_posemb(old, new):
   zoom = (gs_new/gs_old, gs_new/gs_old, 1)
   grid = scipy.ndimage.zoom(grid, zoom, order=1)
   grid = grid.reshape(1, gs_new*gs_new, -1)
-  return jnp.array(grid)
+  return grid
 
 
 def fix_old_checkpoints(params):
@@ -312,14 +353,44 @@ def fix_old_checkpoints(params):
   return params
 
 
+def pyloop_to_scan(params_pyloop):
+  """Converts a python for-loop ViT checkpoint to a lax.scan based one."""
+  # On a high level, they are the same except that the for loop has separate
+  # array pytrees for each encoderblock, while the scan one has just one
+  # encoderblock pytree, with all block's params concatenated.
+
+  params_scan = jax.tree_map(lambda x: x, params_pyloop)  # Structural copy
+  t = params_scan["Transformer"]
+
+  # Find highest index of encoderblocks in the checkpoint (they start at 0):
+  encoderblocks = {k for k in t if k.startswith("encoderblock_")}
+  depth = 1 + max({int(k.split("_")[-1]) for k in encoderblocks})
+
+  def stack(*values):
+    return np.stack(values)
+
+  # Stack all encoderblocks into a single one:
+  t["encoderblock"] = jax.tree_map(
+      stack, *[t[f"encoderblock_{lyr}"] for lyr in range(depth)])
+
+  for lyr in range(depth):
+    del t[f"encoderblock_{lyr}"]
+
+  return params_scan
+
+
 def load(init_params, init_file, model_cfg, dont_load=()):  # pylint: disable=invalid-name because we had to CamelCase above.
   """Load init from checkpoint, both old model and this one. +Hi-res posemb."""
   del model_cfg
 
   init_file = VANITY_NAMES.get(init_file, init_file)
-  restored_params = utils.load_params(None, init_file)
+  restored_params = utils.load_params(init_file)
 
   restored_params = fix_old_checkpoints(restored_params)
+
+  if init_params and "encoderblock" in init_params["Transformer"]:
+    restored_params = pyloop_to_scan(restored_params)
+  # TODO: detect and convert the other way around too.
 
   # possibly use the random init for some of the params (such as, the head).
   restored_params = common.merge_params(restored_params, init_params, dont_load)

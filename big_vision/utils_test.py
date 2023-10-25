@@ -1,4 +1,4 @@
-# Copyright 2022 Big Vision Authors.
+# Copyright 2023 Big Vision Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -15,14 +15,20 @@
 """Tests for utils."""
 
 from functools import partial
+import os
+
 from absl.testing import parameterized
 from big_vision import utils
 import chex
 import flax
 import jax
+from jax.experimental.array_serialization import serialization as array_serial
 import jax.numpy as jnp
 import numpy as np
 import tensorflow as tf
+
+from tensorflow.io import gfile
+
 
 NDEV = 4
 
@@ -270,6 +276,79 @@ class CreateLearningRateScheduleTest(parameterized.TestCase, tf.test.TestCase):
         **extra_kwargs)
     lr = lr_fn(step)
     self.assertAlmostEqual(lr, expected_lr)
+
+
+class CheckpointTest(tf.test.TestCase):
+
+  def setup(self):
+    gacm = array_serial.GlobalAsyncCheckpointManager()
+
+    save_path = os.path.join(self.create_tempdir('workdir'), 'checkpoint.bv')
+    x = utils.put_cpu(np.array([1, 2, 3, 4]))
+    y = utils.put_cpu(np.array([5, 6, 7, 8]))
+    ckpt = {'x': x, 'y': {'z': y}}
+
+    sharding = jax.sharding.SingleDeviceSharding(jax.devices('cpu')[0])
+    shardings = jax.tree_map(lambda _: sharding, ckpt)
+
+    return gacm, save_path, ckpt, shardings
+
+  def test_save_and_load(self):
+    gacm, save_path, ckpt, shardings = self.setup()
+    step = 100
+    utils.save_checkpoint_ts(gacm, ckpt, save_path, step, keep=True)
+    gacm.wait_until_finished()
+    ckpt_loaded = utils.load_checkpoint_ts(save_path,
+                                           tree=ckpt, shardings=shardings)
+    chex.assert_trees_all_equal(ckpt_loaded, ckpt)
+
+    save_path_step = f'{save_path}-{step:09d}'
+    ckpt_loaded_step = utils.tsload(save_path_step, shardings=shardings)
+    chex.assert_trees_all_equal(ckpt_loaded_step, ckpt)
+
+  def test_save_and_partial_load(self):
+    gacm, save_path, ckpt, shardings = self.setup()
+    utils.save_checkpoint_ts(gacm, ckpt, save_path, step=100)
+    gacm.wait_until_finished()
+    _ = shardings.pop('x'), ckpt.pop('x')
+    ckpt_loaded = utils.load_checkpoint_ts(save_path,
+                                           tree=ckpt, shardings=shardings)
+    chex.assert_trees_all_equal(ckpt_loaded, ckpt)
+
+  def test_save_and_cpu_load(self):
+    gacm, save_path, ckpt, _ = self.setup()
+    utils.save_checkpoint_ts(gacm, ckpt, save_path, step=100)
+    gacm.wait_until_finished()
+    ckpt_loaded = utils.load_checkpoint_ts(save_path)
+    chex.assert_trees_all_equal(ckpt_loaded, ckpt)
+
+  def test_save_and_partial_cpu_load(self):
+    gacm, save_path, ckpt, _ = self.setup()
+    utils.save_checkpoint_ts(gacm, ckpt, save_path, step=100)
+    gacm.wait_until_finished()
+    ckpt.pop('y')
+    ckpt_loaded = utils.load_checkpoint_ts(save_path, regex='x.*')
+    chex.assert_trees_all_equal(ckpt_loaded, ckpt)
+
+  def test_keep_deletes(self):
+    def x(tree, factor):  # x as in "times" for multiplying.
+      return jax.tree_map(lambda a: a * factor, tree)
+
+    gacm, save_path, ckpt, _ = self.setup()
+    utils.save_checkpoint_ts(gacm, ckpt, save_path, step=100, keep=False)
+    utils.save_checkpoint_ts(gacm, x(ckpt, 2), save_path, step=200, keep=True)
+    utils.save_checkpoint_ts(gacm, x(ckpt, 3), save_path, step=300, keep=False)
+    gacm.wait_until_finished()
+    ckpt_loaded_200 = utils.tsload(f'{save_path}-{200:09d}')
+    chex.assert_trees_all_equal(ckpt_loaded_200, x(ckpt, 2))
+    ckpt_loaded_300 = utils.tsload(f'{save_path}-{300:09d}-tmp')
+    chex.assert_trees_all_equal(ckpt_loaded_300, x(ckpt, 3))
+    ckpt_loaded_last = utils.load_checkpoint_ts(save_path)
+    chex.assert_trees_all_equal(ckpt_loaded_last, x(ckpt, 3))
+    with self.assertRaises(Exception):  # Can different types depending on fs.
+      _ = utils.tsload(f'{save_path}-{100:09d}')
+    # Test that ckpt@100 was deleted
+    self.assertFalse(gfile.exists(f'{save_path}-{100:09d}-tmp'))
 
 
 if __name__ == '__main__':
