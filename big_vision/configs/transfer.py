@@ -46,6 +46,10 @@ def _set_model(config, model):
     config.model_name = 'vit'
     config.model_init = 'howto-i21k-B/32'
     config.model = dict(variant='B/32', pool_type='tok')
+  elif model == 'vit-i21k-augreg-l/16':
+    config.model_name = 'vit'
+    config.model_init = 'howto-i21k-L/16'
+    config.model = dict(variant='L/16', pool_type='tok')
   elif model == 'vit-s16':
     config.model_name = 'vit'
     config.model_init = 'i1k-s16-300ep'
@@ -148,7 +152,8 @@ def _set_imagenet_variants(config, h_res=448, l_res=384):
 def get_config(arg=None):
   """Config for adaptation."""
   arg = bvcc.parse_arg(arg, model='vit', dataset='cifar10', crop='resmall_crop',
-                       h_res=448, l_res=384, batch_size=512, runlocal=False)
+                       h_res=448, l_res=384, batch_size=512, fsdp=False,
+                       runlocal=False)
   config = mlc.ConfigDict()
 
   config.input = {}
@@ -170,6 +175,11 @@ def get_config(arg=None):
   config.seed = 0
 
   _set_dataset(config, arg.dataset, arg.crop, arg.h_res, arg.l_res)
+
   _set_model(config, arg.model)
+  if arg.fsdp:
+    config.param_sharding = 'fully_sharded'
+    config.optim_sharding = 'fully_sharded'
+    config.model.scan = True
 
   return config
