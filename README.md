@@ -345,11 +345,6 @@ on `cifar10` dataset.
 gcloud compute tpus tpu-vm ssh $NAME --zone=$ZONE --worker=all --command "TFDS_DATA_DIR=gs://$GS_BUCKET_NAME/tensorflow_datasets bash big_vision/run_tpu.sh big_vision.train --config big_vision/configs/transfer.py:model=vit-i21k-augreg-b/32,dataset=cifar10,crop=resmall_crop --workdir gs://$GS_BUCKET_NAME/big_vision/workdir/`date '+%m-%d_%H%M'` --config.lr=0.03"
 ```
 
-## Checkpointing on cloud
-
-In the past, we recommended writing checkpoints to a Google Cloud Bucket. With the latest update, this is very slow because of technical issues with the checkpointing format.
-We are working on a solution, but in the meantime, we have updated our instructions to write checkpoints to a local folder on the TPU machine. Don't forget to copy useful checkpoints elsewhere after training.
-
 ## Run the train script on TPU VMs
 
 To train your own big_vision models on a large dataset,
@@ -358,6 +353,16 @@ run the following command line.
 
 ```
 gcloud compute tpus tpu-vm ssh $NAME --zone=$ZONE --worker=all --command "TFDS_DATA_DIR=gs://$GS_BUCKET_NAME/tensorflow_datasets bash big_vision/run_tpu.sh big_vision.train --config big_vision/configs/bit_i1k.py  --workdir gs://$GS_BUCKET_NAME/big_vision/workdir/`date '+%m-%d_%H%M'`"
+```
+
+## FSDP training.
+
+`big_vision` supports flexible parameter and model sharding strategies.
+Currently, we support the popular sharding strategy, name FSDP, via a simple config change, see [this config example](big_vision/configs/transfer.py).
+For example, to run FSDP finetuning of a pretrained ViT-L model, run the following command (possibly adjusting batch size depending on your hardware):
+
+```
+gcloud compute tpus tpu-vm ssh $NAME --zone=$ZONE --worker=all --command "TFDS_DATA_DIR=gs://$GS_BUCKET_NAME/tensorflow_datasets bash big_vision/run_tpu.sh big_vision.train --config big_vision/configs/transfer.py:model=vit-i21k-augreg-l/16,dataset=oxford_iiit_pet,crop=resmall_crop,fsdp=True,batch_size=256 --workdir gs://$GS_BUCKET_NAME/big_vision/workdir/`date '+%m-%d_%H%M'` --config.lr=0.03"
 ```
 
 ## Sometimes useful gcloud commands
