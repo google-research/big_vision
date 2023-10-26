@@ -1,4 +1,4 @@
-# Copyright 2022 Big Vision Authors.
+# Copyright 2023 Big Vision Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -22,6 +22,7 @@ from big_vision.models.proj.flaxformer import bert_test_util
 import big_vision.pp.builder as pp_builder
 import big_vision.pp.ops_general  # pylint: disable=unused-import
 import big_vision.pp.proj.flaxformer.bert_ops  # pylint: disable=unused-import
+import flax
 import jax
 import jax.numpy as jnp
 import tensorflow as tf
@@ -61,7 +62,7 @@ class BertTest(tf.test.TestCase):
     text = jnp.array(next(iter(ds2))["labels"])
     model = bert.Model(config="base")
     variables = model.init(jax.random.PRNGKey(0), text)
-    params = bert.load(variables.unfreeze()["params"],
+    params = bert.load(flax.core.unfreeze(variables)["params"],
                        bert_test_util.create_base_checkpoint())
     x, out = model.apply({"params": params}, text)
     self.assertAllEqual(jax.tree_map(jnp.shape, x), (1, 768))

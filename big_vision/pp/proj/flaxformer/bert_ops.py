@@ -1,4 +1,4 @@
-# Copyright 2022 Big Vision Authors.
+# Copyright 2023 Big Vision Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -26,14 +26,22 @@ import tensorflow_text
 # WordpieceTokenizer
 # https://github.com/tensorflow/text/blob/master/tensorflow_text/python/ops/wordpiece_tokenizer.py
 def _create_bert_tokenizer(vocab_path):
+  """Returns cls_token id and tokenizer to use in a tf.Dataset.map function."""
+  # Create tokenizer inside a tf.init_scope so the vocab is only loaded from
+  # disk once per dataset iterator (see: http://(internal link)).
+  # TODO: Make a local copy of vocab if creating many iterators.
+  with tf.init_scope():
+    tokenizer = tensorflow_text.BertTokenizer(
+        vocab_path,
+        token_out_type=tf.int32,
+        lower_case=True,
+    )
+
   with tf.io.gfile.GFile(vocab_path) as f:
     vocab = f.read().split("\n")
   cls_token = vocab.index("[CLS]")
-  return cls_token, tensorflow_text.BertTokenizer(
-      vocab_path,
-      token_out_type=tf.int32,
-      lower_case=True,
-  )
+
+  return cls_token, tokenizer
 
 
 @Registry.register("preprocess_ops.bert_tokenize")

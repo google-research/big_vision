@@ -1,4 +1,4 @@
-# Copyright 2022 Big Vision Authors.
+# Copyright 2023 Big Vision Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -37,13 +37,21 @@ import operator
 import time
 
 from absl import logging
+from big_vision import input_pipeline
 from big_vision.evaluators.proj.image_text import image_text_retrieval
 import big_vision.pp.builder as pp_builder
-from clu import deterministic_data
 import jax
+import jax.numpy as jnp
+from jax.sharding import NamedSharding
+from jax.sharding import PartitionSpec as P
 import numpy as np
 import tensorflow as tf
 import tensorflow_datasets as tfds
+
+
+# Temporary global flag to facilitate backwards compatability. Will be removed
+# by the end of year 2023.
+API = "jit"
 
 
 def _with_infinite_padding(dataset):
@@ -58,20 +66,14 @@ def _with_infinite_padding(dataset):
   return dataset.concatenate(filler_dataset.repeat(None))
 
 
-def _pad_and_batch(dataset, batch_dims):
-  """Adds padding and then batches dataset."""
-  dataset = _with_infinite_padding(dataset)
-  for batch_size in reversed(batch_dims):
-    dataset = dataset.batch(batch_size)
-  return dataset
-
-
 # This is needed so retrieval_test can replace dataset info.
 def _get_dataset_info(builder):
   return builder.info
 
 
-def prepare_datasets(dataset, *, pp_img, pp_txt, txt_name, offset=0):
+def prepare_datasets(
+    dataset, *, pp_img, pp_txt, txt_name, offset=0, cache_final=False
+):
   """Returns unbatched `ds_images, ds_texts` datasets.
 
   Args:
@@ -93,6 +95,7 @@ def prepare_datasets(dataset, *, pp_img, pp_txt, txt_name, offset=0):
     offset: Offset that should be added to enumerated examples to generate IDs.
       In a multi-host setup, this is typically set to a value large enough to
       make all IDs distinct.
+    cache_final: Whether the dataset should be cached.
 
   Returns:
     Image and text datasets.
@@ -121,6 +124,8 @@ def prepare_datasets(dataset, *, pp_img, pp_txt, txt_name, offset=0):
   ds_texts = dataset.enumerate().flat_map(get_captions).map(
       pp_builder.get_preprocess_fn(
           f"{pp_txt}|keep('id', 'caption_i', 'labels')"))
+  if cache_final:
+    ds_images, ds_texts = ds_images.cache(), ds_texts.cache()
   return ds_images, ds_texts
 
 
@@ -129,20 +134,15 @@ def _split_and_batch(dataset_name, batch_size, split, get_ds, data_dir=None):
   assert not batch_size % jax.device_count(), (
       f"batch_size={batch_size} % jax.device_count()={jax.device_count()}")
   builder = tfds.builder(dataset_name, data_dir=data_dir)
-  batch_dims = [
-      jax.local_device_count(), batch_size // jax.device_count()
-  ]
   info = _get_dataset_info(builder)
   num_examples = info.splits[split].num_examples
-  read_instruction = deterministic_data.get_read_instruction_for_host(
-      split=split,
-      dataset_info=info,
-      remainder_options=deterministic_data.RemainderOptions.ON_FIRST_PROCESS)
-  ds_images, ds_texts = get_ds(builder.as_dataset(split=read_instruction),
-                               offset=jax.process_index() * num_examples)
+  ds_images, ds_texts = get_ds(
+      builder.as_dataset(split=tfds.split_for_jax_process(split)),
+      offset=jax.process_index() * num_examples,
+  )
   return (
-      _pad_and_batch(ds_images, batch_dims),
-      _pad_and_batch(ds_texts, batch_dims),
+      _with_infinite_padding(ds_images).batch(batch_size),
+      _with_infinite_padding(ds_texts).batch(batch_size),
   )
 
 
@@ -157,8 +157,10 @@ class Evaluator:
                pp_txt,
                txt_name,
                batch_size,
+               devices,
                data_dir=None,
-               split="test"):
+               split="test",
+               cache_final=True):
     """Initializes a new zero-shot image/text retrieval evaluator.
 
     See `prepare_datasets()` for details on how the dataset is pre-processed.
@@ -177,40 +179,52 @@ class Evaluator:
         value in a nested feature dictionary). Expected shape=[None],
         dtype=string. specified then items are used as lookup path.
       batch_size: Global batch size.
+      devices: list of devices.
       data_dir: Optional dir to load the TFDS dataset from.
       split: The split of the eval data.
+      cache_final: Wether preprocessed dataset should be cached.
     """
     self.ds_images, self.ds_texts = _split_and_batch(
-        dataset, batch_size, split,
+        dataset,
+        batch_size,
+        split,
         functools.partial(
-            prepare_datasets, pp_img=pp_img, pp_txt=pp_txt, txt_name=txt_name),
-        data_dir=data_dir)
+            prepare_datasets,
+            pp_img=pp_img,
+            pp_txt=pp_txt,
+            txt_name=txt_name,
+            cache_final=cache_final,
+        ),
+        data_dir=data_dir,
+    )
     self._axis_name = "batch"
 
-    def embed_images(params, images):
-      zimg, _, _ = predict_fn(params, images, None)
-      return jax.lax.all_gather(zimg, axis_name=self._axis_name)
+    self.devices = devices
+    mesh = jax.sharding.Mesh(devices, ("devices",))
 
-    def embed_texts(params, texts):
-      _, ztxt, _ = predict_fn(params, None, texts)
-      return jax.lax.all_gather(ztxt, axis_name=self._axis_name)
+    def embed_images(train_state, images):
+      zimg, _, _ = predict_fn(train_state, {"image": images})
+      return zimg
 
-    self._embed_images_p = jax.pmap(embed_images, axis_name=self._axis_name)
-    self._embed_texts_p = jax.pmap(embed_texts, axis_name=self._axis_name)
-    self._all_gather_p = jax.pmap(
-        lambda x: jax.lax.all_gather(x, axis_name=self._axis_name),
-        axis_name=self._axis_name)
-    self._count_p = jax.pmap(
-        lambda mask: jax.lax.psum(mask.sum(), axis_name=self._axis_name),
-        axis_name=self._axis_name)
+    def embed_texts(train_state, texts):
+      _, ztxt, _ = predict_fn(train_state, {"labels": texts})
+      return ztxt
+
+    self._embed_images_p = jax.jit(embed_images,
+                                   out_shardings=NamedSharding(mesh, P()))
+    self._embed_texts_p = jax.jit(embed_texts,
+                                  out_shardings=NamedSharding(mesh, P()))
+    self._all_gather_p = jax.jit(
+        lambda x: x, out_shardings=NamedSharding(mesh, P()))
+    self._count_p = jax.jit(jnp.sum, out_shardings=NamedSharding(mesh, P()))
     self._compiled = set()
 
-  def _embed(self, name, params, ds, embed_fn, id_names):
+  def _embed(self, name, train_state, ds, embed_fn, id_names):
     """Embeds features name `name` using `embed_fn`.
 
     Args:
       name: Feature name to be embedded.
-      params: Parameters for the predict_fn.
+      train_state: train_state for the predict_fn.
       ds: The dataset.
       embed_fn: A pmapped function that returns the embeddings.
       id_names: An iterable of feature names that should be collected.
@@ -224,8 +238,10 @@ class Evaluator:
 
     t0 = time.time()
 
-    for batch in ds:
-      ns.append(self._count_p(np.asarray(memoryview(batch["mask"])))[0])
+    ds_b = input_pipeline.start_global(ds, self.devices)
+    for batch in ds_b:
+      ns.append(jax.device_get(self._count_p(batch["mask"])))
+
       # Due to infinite padding, this loop will never end. We will stop once
       # all processes only process padded data. We don't check the latest
       # DeviceArray `ns[-1]` Because we want to keep our computation async for
@@ -233,16 +249,15 @@ class Evaluator:
       if len(ns) >= 2 and ns[-2] == 0:
         break
 
-      embs = embed_fn(params, np.asarray(memoryview(batch[name])))[0]
+      embs = embed_fn(train_state, batch[name])
       if embed_fn not in self._compiled:
         logging.info("Compiled %s embeddings in %.3fs", name, time.time() - t0)
         t0 = time.time()
         self._compiled.add(embed_fn)
 
-      embeddings.append(embs.reshape([-1, embs.shape[-1]]))
+      embeddings.append(jax.device_get(embs))
       for id_name in ids:
-        ids[id_name].append(
-            self._all_gather_p(np.array(batch[id_name]))[0].flatten())
+        ids[id_name].append(jax.device_get(self._all_gather_p(batch[id_name])))
 
     # Only access DeviceArray at end of loop for better efficiency.
     ns = np.array(ns)
@@ -257,12 +272,12 @@ class Evaluator:
         **{k: v[masks] for k, v in ids.items()},
     }
 
-  def evaluate(self, params):
+  def evaluate(self, train_state):
     """Returns evaluation results."""
-    images = self._embed("image", params, self.ds_images, self._embed_images_p,
-                         ("id",))
-    texts = self._embed("labels", params, self.ds_texts, self._embed_texts_p,
-                        ("id", "caption_i"))
+    images = self._embed("image", train_state, self.ds_images,
+                         self._embed_images_p, ("id",))
+    texts = self._embed("labels", train_state, self.ds_texts,
+                        self._embed_texts_p, ("id", "caption_i"))
     # Shapes: (nimg, emb) * (emb, ntxt) -> (nimg, ntxt)
     similarities = np.dot(images["embeddings"], texts["embeddings"].T)
 
@@ -282,9 +297,9 @@ class Evaluator:
         txt2img=txt2img,
     )
 
-  def run(self, params):
+  def run(self, train_state):
     """Returns metrics."""
-    results = self.evaluate(params)
+    results = self.evaluate(train_state)
     return [(f"{direction}_{k.lower()}", v)
             for direction in ("img2txt", "txt2img")
             for k, v in results[direction].items()]

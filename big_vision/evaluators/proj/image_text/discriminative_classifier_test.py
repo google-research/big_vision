@@ -1,4 +1,4 @@
-# Copyright 2022 Big Vision Authors.
+# Copyright 2023 Big Vision Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -20,7 +20,6 @@ from big_vision.evaluators.proj.image_text import discriminative_classifier
 from big_vision.pp import ops_general  # pylint: disable=unused-import
 from big_vision.pp import ops_image  # pylint: disable=unused-import
 from big_vision.pp.registry import Registry
-import flax
 import flax.linen as nn
 import jax
 import jax.numpy as jnp
@@ -64,7 +63,7 @@ class _Model(nn.Module):
         return jnp.stack([jnp.cos(x / 10.), jnp.sin(x / 10.)]).T
 
     if texts is not None:
-      texts %= 5  # For testing `filter_fn` below.
+      texts %= 5  # For testing `pre_filter_fn` below.
     return z(image), z(texts), None
 
 
@@ -192,32 +191,35 @@ class DiscriminativeClassifierTest(tf.test.TestCase):
     get_class_names_mock.return_value = class_names
     get_dataset_info_mock.return_value.splits = splits
 
-    def filter_fn(features):
+    def pre_filter_fn(features):
       return features["label"] < 5  # matches `texts %= 5` above
 
     dataset_name = "cifar10_test"
     with tfds.testing.mock_data(num_examples=per_host_num_examples):
       evaluator = discriminative_classifier.Evaluator(
-          lambda p, i, t: model.apply({"params": p}, i, t),
+          lambda p, b: model.apply({"params": p},
+                                   b.get("image", None),
+                                   b.get("labels", None)),
           dataset_names=[dataset_name],
           prompt_templates="test_prompts",
           batch_size=global_batch_size,
+          devices=jax.devices(),
           pp_img="copy_from(image='label')",
           pp_txt="copy_from(labels='label')",
           dataset_overrides={
               dataset_name: {
                   "dataset_name": "cifar10",
                   "class_names": "test_classes",
-                  "filter_fn": filter_fn,
+                  "pre_filter_fn": pre_filter_fn,
               }
           },
           first_class_name_only=True,
       )
       results = evaluator.evaluate(
-          flax.jax_utils.replicate(params),
+          params,
           dataset_name,
           return_embeddings=True)
-      metrics = dict(evaluator.run(flax.jax_utils.replicate(params)))
+      metrics = dict(evaluator.run(params))
 
     # Assert all examples were processed.
     self.assertLen(results["texts"]["embedding"],

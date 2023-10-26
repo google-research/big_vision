@@ -121,11 +121,11 @@ def load(init_params, init_files, model_cfg, img_load_kw={}, txt_load_kw={}):  #
 
   t_init = init_files.pop("temperature", init_files.pop("t", None))
   if t_init:
-    restored_params["t"] = utils.load_params(None, t_init)
+    restored_params["t"] = utils.load_params(t_init)
 
   b_init = init_files.pop("bias", init_files.pop("b", None))
   if b_init:
-    restored_params["b"] = utils.load_params(None, b_init)
+    restored_params["b"] = utils.load_params(b_init)
 
   assert not init_files, (
       f"There's something unused left in `config.model_init`. You probably got "

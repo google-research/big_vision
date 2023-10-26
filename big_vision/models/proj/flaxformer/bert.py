@@ -1,4 +1,4 @@
-# Copyright 2022 Big Vision Authors.
+# Copyright 2023 Big Vision Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -90,5 +90,5 @@ def load(params, path, model_cfg=None, dont_load=()):
   logging.info(
       "Could not find original BERT checkpoint path '%s', "
       "loading big_vision checkpoint '%s'", checkpoint_path, path)
-  restored_params = utils.load_params(None, path)
+  restored_params = utils.load_params(path)
   return common.merge_params(restored_params, params, dont_load)

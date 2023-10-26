@@ -1,4 +1,4 @@
-# Copyright 2022 Big Vision Authors.
+# Copyright 2023 Big Vision Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -20,26 +20,26 @@ from big_vision.evaluators.proj.image_text import prompt_engineering
 
 class PromptEngineeringTest(absltest.TestCase):
 
-  def test_canonicalize(self):
-    self.assertEqual(prompt_engineering._canonicalize("test_test"), "test test")
+  def test_canonicalize_text(self):
+    self.assertEqual(prompt_engineering.canonicalize_text("test_test"), "test test")
     self.assertEqual(
-        prompt_engineering._canonicalize("test___test"), "test test")
-    self.assertEqual(prompt_engineering._canonicalize("test"), "test")
-    self.assertEqual(prompt_engineering._canonicalize("test."), "test")
-    self.assertEqual(prompt_engineering._canonicalize(" test "), "test")
+        prompt_engineering.canonicalize_text("test___test"), "test test")
+    self.assertEqual(prompt_engineering.canonicalize_text("test"), "test")
+    self.assertEqual(prompt_engineering.canonicalize_text("test."), "test")
+    self.assertEqual(prompt_engineering.canonicalize_text(" test "), "test")
     self.assertEqual(
-        prompt_engineering._canonicalize("test\ntest"), "test test")
+        prompt_engineering.canonicalize_text("test\ntest"), "test test")
     self.assertEqual(
-        prompt_engineering._canonicalize("test  test"), "test test")
-    self.assertEqual(prompt_engineering._canonicalize("test {}"), "test")
+        prompt_engineering.canonicalize_text("test  test"), "test test")
+    self.assertEqual(prompt_engineering.canonicalize_text("test {}"), "test")
     self.assertEqual(
-        prompt_engineering._canonicalize(
+        prompt_engineering.canonicalize_text(
             "test {}", keep_punctuation_exact_string="{}"), "test {}")
     self.assertEqual(
-        prompt_engineering._canonicalize(
+        prompt_engineering.canonicalize_text(
             " test  {}...", keep_punctuation_exact_string="{}"), "test {}")
     self.assertEqual(
-        prompt_engineering._canonicalize(
+        prompt_engineering.canonicalize_text(
             "test {}  {}  {}", keep_punctuation_exact_string="{}"),
         "test {} {} {}")
 

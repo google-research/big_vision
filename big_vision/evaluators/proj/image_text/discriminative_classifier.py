@@ -1,4 +1,4 @@
-# Copyright 2022 Big Vision Authors.
+# Copyright 2023 Big Vision Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -19,16 +19,24 @@ import functools
 import time
 
 from absl import logging
+from big_vision import input_pipeline
+from big_vision import utils
 from big_vision.evaluators.proj.image_text import prompt_engineering
 from big_vision.pp import ops_general  # pylint: disable=unused-import
 from big_vision.pp import ops_image  # pylint: disable=unused-import
 import big_vision.pp.builder as pp_builder
-import flax
 import jax
 import jax.numpy as jnp
+from jax.sharding import NamedSharding
+from jax.sharding import PartitionSpec as P
 import numpy as np
 import tensorflow as tf
 import tensorflow_datasets as tfds
+
+
+# Temporary global flag to facilitate backwards compatability. Will be removed
+# by the end of year 2023.
+API = "jit"
 
 
 DATASET_NAMES = ("imagenet2012", "cifar100", "oxford_iiit_pet")
@@ -52,14 +60,6 @@ def _with_infinite_padding(dataset):
   return dataset.concatenate(filler_dataset.repeat(None))
 
 
-def _pad_and_batch(dataset, batch_dims):
-  """Adds padding and then batches dataset."""
-  dataset = _with_infinite_padding(dataset)
-  for batch_size in reversed(batch_dims):
-    dataset = dataset.batch(batch_size)
-  return dataset
-
-
 # This is needed so retrieval_test can replace dataset info.
 def _get_dataset_info(builder):
   return builder.info
@@ -72,7 +72,7 @@ def prepare_datasets(img_dataset,
                      pp_img,
                      pp_txt,
                      cache_final=False,
-                     filter_fn=None,
+                     pre_filter_fn=None,
                      class_name_offset=0):
   """Returns unbatched `ds_images, ds_texts` datasets."""
 
@@ -100,8 +100,8 @@ def prepare_datasets(img_dataset,
         "texts": tf.strings.join([parts[0], features["class_name"], parts[1]])
     }
 
-  if filter_fn:
-    img_dataset = img_dataset.filter(filter_fn)
+  if pre_filter_fn:
+    img_dataset = img_dataset.filter(pre_filter_fn)
   ds_images = img_dataset.map(
       pp_builder.get_preprocess_fn(f"{pp_img}|keep('label', 'image')"))
   ds_texts = tf.data.Dataset.from_tensor_slices(list(class_names)).enumerate(
@@ -120,13 +120,10 @@ def _split_and_batch(dataset_name, data_dir, class_names, batch_size, split,
   assert not batch_size % jax.device_count(), (
       f"batch_size={batch_size} % jax.device_count()={jax.device_count()}")
   builder = tfds.builder(dataset_name, data_dir=data_dir)
-  batch_dims = [
-      jax.local_device_count(), batch_size // jax.device_count()
-  ]
 
   # Split class names (last process gets remainder).
   if len(class_names) < jax.process_count():
-    # See cl/442751961 for more details.
+    # See (internal link) for more details.
     class_names += [""] * (jax.process_count() - len(class_names))
   per_process = len(class_names) // jax.process_count()
   class_name_offset = per_process * jax.process_index()
@@ -140,8 +137,8 @@ def _split_and_batch(dataset_name, data_dir, class_names, batch_size, split,
       class_names,
       class_name_offset=class_name_offset)
   return (
-      _pad_and_batch(ds_images, batch_dims),
-      _pad_and_batch(ds_texts, batch_dims),
+      _with_infinite_padding(ds_images).batch(batch_size),
+      _with_infinite_padding(ds_texts).batch(batch_size),
   )
 
 
@@ -174,6 +171,7 @@ class Evaluator:
                predict_fn,
                *,
                batch_size,
+               devices,
                dataset_names=DATASET_NAMES,
                data_dir=None,
                class_names="dataset_info:label",
@@ -184,9 +182,8 @@ class Evaluator:
                pp_txt="tokenize(max_len=16, eos='sticky', "
                       "pad_value=1, inkey='texts', outkey='labels')",
                cache_final=False,
-               filter_fn=None,
+               pre_filter_fn=None,
                first_class_name_only=True,
-               batched_features_transform=lambda x: x,
                dataset_overrides=DEFAULT_OVERRIDES,
                async_delay=1):
     """Initializes a new zero-shot classification evaluator.
@@ -197,6 +194,7 @@ class Evaluator:
       predict_fn: Prediction function with signature
         `zimg, ztxt, out = predict_fn(params, images, texts)`
       batch_size: Global batch size.
+      devices: list of devices.
       dataset_names: Names of TFDS datasets to evaluate on.
       data_dir: Optional argument to `tfds.builder()`.
       class_names: Usually specified as a string that is interpreted by
@@ -216,14 +214,12 @@ class Evaluator:
         (shape=[], dtype=string), and is expected to produce "labels" key that
         is suitable for the `text` argument of `predict_fn` input.
       cache_final: Wether preprocesse dataset should be cached.
-      filter_fn: Predicate to be applied to the dataset for filtering records.
+      pre_filter_fn: Predicate applied to the dataset for filtering records.
       first_class_name_only: Whether only the first class name should be
         considered (i.e. not using any aliases).
-      batched_features_transform: Function that is applied to the batched
-        features before embedding the texts/images.
       dataset_overrides: Mapping `dataset_name` to an optional dictionary that
         can override parameters `dataset_name`, `data_dir`, `pp_img`, `pp_txt`,
-        `class_names`, `split`, `filter_fn`, and the extra
+        `class_names`, `split`, `pre_filter_fn`, and the extra
         `class_names_dataset_name`.
         Works with tuple/dict of tuples/dicts.
       async_delay: How many steps to wait before checking if all hosts have
@@ -252,7 +248,11 @@ class Evaluator:
       pp_txt_ = overrides.pop("pp_txt", pp_txt)
       cache_final_ = overrides.pop("cache_final", cache_final)
       split_ = overrides.pop("split", split)
-      filter_fn_ = overrides.pop("filter_fn", filter_fn)
+      pre_filter_fn_ = overrides.pop("pre_filter_fn", pre_filter_fn)
+      prompt_templates_ = overrides.pop("prompt_templates", prompt_templates)
+      canonicalize_ = overrides.pop("canonicalize", canonicalize)
+      prompt_templates_ = prompt_engineering.get_prompt_templates(
+          prompt_templates_, canonicalize=canonicalize_)
       assert not overrides, f"Unknown overrides {dataset_name}: {overrides}"
 
       if first_class_name_only:
@@ -268,60 +268,57 @@ class Evaluator:
               pp_img=pp_img_,
               pp_txt=pp_txt_,
               cache_final=cache_final_,
-              filter_fn=filter_fn_,
-              prompt_templates=self.prompt_templates))
+              pre_filter_fn=pre_filter_fn_,
+              prompt_templates=prompt_templates_))
       self.datasets[dataset_name] = dict(
           images=ds_images, texts=ds_texts, class_names=class_names_,
           dataset_name=dataset_name_, split=split_)
 
     assert not dataset_overrides, f"Extra overrides: {dataset_overrides}"
 
-    def embed_texts(params, texts):
+    def embed_texts(train_state, texts):
       """Returns text embeddings."""
-      _, ztxt, _ = predict_fn(params, None, texts)
-      return jnp.concatenate(
-          jax.lax.all_gather(ztxt, axis_name=self._axis_name), axis=0)
+      _, ztxt, _ = predict_fn(train_state, {"labels": texts})
+      return ztxt
 
-    def count_correct(params, return_embeddings, *, mask, labels, image, ztxt):
+    def count_correct(train_state, return_embeddings, *, mask, labels, image,
+                      ztxt):
       """Returns count of correct predictions (and optionally embeddings)."""
-      zimg, _, _ = predict_fn(params, image, None)
+      zimg, _, _ = predict_fn(train_state, {"image": image})
       best_txt = (zimg @ ztxt.T).argmax(axis=1)
       # labels has format [[1, -1, -1], [5, -1, -1], [7, 2, -1], ...]
       # so here we count "any" correct, such that the counting matches the
       # multilabel scenario described in "are we done with imagenet"
       # (http://arxiv.org/abs/2006.07159) section 3.1
+      if labels.ndim == 1:
+        labels = labels[..., None]
       assert labels.ndim == 2, labels.shape
       matching = (best_txt[:, None] == labels).sum(axis=1)
       correct = jnp.where(mask, (matching > 0).astype(jnp.int32), 0).sum()
-      correct = jax.lax.psum(correct, axis_name=self._axis_name)
+      correct = jnp.sum(correct)
       if return_embeddings:
-        zimg = jnp.concatenate(
-            jax.lax.all_gather(zimg, axis_name=self._axis_name), axis=0)
+        return correct, zimg
       else:
-        zimg = None
-      return correct, zimg
+        return correct, None
 
-    def gather_concatenate(x):
-      """Gathers data from all hosts (for use with `embed_texts()`)."""
-      return jnp.concatenate(
-          jax.lax.all_gather(x, axis_name=self._axis_name), axis=0)
+    self.devices = devices
+    self.mesh = jax.sharding.Mesh(devices, ("devices",))
 
-    self._embed_texts_p = jax.pmap(
-        embed_texts, axis_name=self._axis_name)
-    self._count_correct_p = jax.pmap(
-        count_correct, axis_name=self._axis_name, static_broadcasted_argnums=1)
-    self._count_p = jax.pmap(
-        lambda mask: jax.lax.psum(mask.sum(), axis_name=self._axis_name),
-        axis_name=self._axis_name)
-    self._gather_concatenate_p = jax.pmap(
-        gather_concatenate, axis_name=self._axis_name)
+    self._embed_texts_p = jax.jit(
+        embed_texts, out_shardings=NamedSharding(self.mesh, P()))
+    self._count_correct_p = jax.jit(count_correct, static_argnums=(1,),
+                                    out_shardings=NamedSharding(self.mesh, P()))
+    self._count_p = jax.jit(jnp.sum,
+                            out_shardings=NamedSharding(self.mesh, P()))
+    self._all_gather_p = jax.jit(
+        lambda x: x, out_shardings=NamedSharding(self.mesh, P()))
+
     self._compiled = set()
     assert async_delay > 0, f"async_delay must be >0, not {async_delay}"
     self._async_delay = async_delay
-    self._batched_features_transform = batched_features_transform
     logging.info("Initialized evaluator in %.1f seconds", time.monotonic() - t0)
 
-  def _embed_texts(self, params, dataset_name):
+  def _embed_texts(self, train_state, dataset_name):
     """Returns per-class averaged text embeddings."""
     t0 = time.monotonic()
     logging.info("Starting text embedding...")
@@ -329,16 +326,17 @@ class Evaluator:
     embeddings = []
     data = {"label": [], "mask": []}
 
-    for batch in self.datasets[dataset_name]["texts"]:
-      batch = self._batched_features_transform(batch)
-      batch = jax.tree_map(lambda x: np.asarray(memoryview(x)), batch)
-      ns.append(self._count_p(batch["mask"])[0])
+    ds_b = input_pipeline.start_global(
+        self.datasets[dataset_name]["texts"], self.devices)
+    for batch in ds_b:
+      ns.append(jax.device_get(self._count_p(batch["mask"])))
       if len(ns) >= self._async_delay and ns[-self._async_delay] == 0:
         break
 
-      embeddings.append(self._embed_texts_p(params, batch["labels"])[0])
+      embeddings.append(jax.device_get(self._embed_texts_p(
+          train_state, batch["labels"])))
       for name in data:
-        data[name].append(self._gather_concatenate_p(batch[name])[0])
+        data[name].append(jax.device_get(self._all_gather_p(batch[name])))
 
       if self._embed_texts_p not in self._compiled:
         logging.info("Compiled text embeddings in %.1fs", time.monotonic() - t0)
@@ -365,13 +363,14 @@ class Evaluator:
     return data
 
   def evaluate(self,
-               params,
+               train_state,
                dataset_name,
                *,
                return_embeddings=False):
     """Returns evaluation results."""
-    texts = self._embed_texts(params, dataset_name)
-    ztxt_p = flax.jax_utils.replicate(texts["average_embedding"])
+    texts = self._embed_texts(train_state, dataset_name)
+    ztxt_p = texts["average_embedding"]
+    ztxt_p = utils.reshard(ztxt_p, NamedSharding(self.mesh, P()))
 
     t0 = time.monotonic()
     logging.info("Starting image embedding...")
@@ -381,30 +380,23 @@ class Evaluator:
     corrects = []
     data = {"mask": [], "label": []} if return_embeddings else {}
 
-    for batch in self.datasets[dataset_name]["images"]:
-      batch = self._batched_features_transform(batch)
-      batch = jax.tree_map(lambda x: np.asarray(memoryview(x)), batch)
-
-      # Due to infinite padding, this loop will never end. We will stop once
-      # all processes only process padded data. Checking ns[-k] instead of
-      # ns[-1] allows us to tune additional steps vs. interleaved processing.
-      ns.append(self._count_p(batch["mask"])[0])
+    ds_b = input_pipeline.start_global(
+        self.datasets[dataset_name]["images"], self.devices)
+    for batch in ds_b:
+      ns.append(jax.device_get(self._count_p(batch["mask"])))
       if len(ns) >= self._async_delay and ns[-self._async_delay] == 0:
         break
 
       labels = batch["label"]
-      if labels.ndim == 2:
-        labels = labels[..., None]
-      assert labels.ndim == 3
       correct_p, embs_p = self._count_correct_p(
-          params,
+          train_state,
           return_embeddings,
           mask=batch["mask"],
           labels=labels,
           image=batch["image"],
           ztxt=ztxt_p,
       )
-      corrects.append(correct_p[0])
+      corrects.append(jax.device_get(correct_p))
       if self._count_correct_p not in self._compiled:
         logging.info("Compiled image embeddings in %.1fs",
                      time.monotonic() - t0)
@@ -412,9 +404,9 @@ class Evaluator:
         self._compiled.add(self._count_correct_p)
 
       if return_embeddings:
-        embeddings.append(embs_p[0])
+        embeddings.append(jax.device_get(self._all_gather_p(embs_p)))
       for name in data:
-        data[name].append(self._gather_concatenate_p(batch[name])[0])
+        data[name].append(jax.device_get(self._all_gather_p(batch[name])))
 
     ns = np.array(ns)
     n = ns.sum()
@@ -441,8 +433,8 @@ class Evaluator:
 
     return ret
 
-  def run(self, params):
+  def run(self, train_state):
     """Returns metrics."""
     return [(f"{dataset_name}_accuracy",
-             self.evaluate(params, dataset_name)["accuracy"])
+             self.evaluate(train_state, dataset_name)["accuracy"])
             for dataset_name in self.datasets]
