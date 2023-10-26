@@ -28,7 +28,7 @@ import tensorflow_text
 def _create_bert_tokenizer(vocab_path):
   """Returns cls_token id and tokenizer to use in a tf.Dataset.map function."""
   # Create tokenizer inside a tf.init_scope so the vocab is only loaded from
-  # disk once per dataset iterator (see: http://shortn/_kYAdHEpTEj).
+  # disk once per dataset iterator (see: http://(internal link)).
   # TODO: Make a local copy of vocab if creating many iterators.
   with tf.init_scope():
     tokenizer = tensorflow_text.BertTokenizer(
