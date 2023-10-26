@@ -417,9 +417,3 @@ the following BibTEX to cite it:
 # Disclaimer
 
 This is not an official Google Product.
-
-# License
-
-Unless explicitly noted otherwise, everything in the big_vision codebase
-(including models and colabs) is released under the Apache2 license.
-See the LICENSE file for the full license text.

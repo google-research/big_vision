@@ -1,4 +1,4 @@
-# Copyright 2022 Big Vision Authors.
+# Copyright 2023 Big Vision Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -129,14 +129,11 @@ def get_config(arg=None):
   ]
 
   config.grad_clip_norm = 1.0
-  # Gather representations across TPU cores for larger batch size for loss.
-  # See Figure 9 from https://arxiv.org/abs/2111.07991
-  config.loss_use_global_batch = True
 
   # Eval section (Both few-shot and zero-shot)
   eval_common = dict(
       type='proj.image_text.contrastive',
-      use_global_batch=config.loss_use_global_batch,
+      use_global_batch=True,
       log_steps=500 if not arg.runlocal else 5,
   )
   config.evals = {}

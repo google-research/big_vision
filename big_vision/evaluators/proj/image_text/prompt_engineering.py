@@ -1,4 +1,4 @@
-# Copyright 2022 Big Vision Authors.
+# Copyright 2023 Big Vision Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -69,7 +69,7 @@ def get_class_names(*, dataset_name, source="dataset_info", canonicalize=True):
     class_names = source
   if canonicalize:
     class_names = [
-        _canonicalize(name, keep_punctuation_exact_string=",")
+        canonicalize_text(name, keep_punctuation_exact_string=",")
         for name in class_names
     ]
   logging.info("Using %d class_names: %s", len(class_names), class_names)
@@ -83,7 +83,7 @@ def get_prompt_templates(prompt_templates_name,
   prompts_templates = _PROMPT_TEMPLATES[prompt_templates_name]
   if canonicalize:
     prompts_templates = [
-        _canonicalize(name, keep_punctuation_exact_string="{}")
+        canonicalize_text(name, keep_punctuation_exact_string="{}")
         for name in prompts_templates
     ]
   logging.info("Using %d prompts_templates: %s", len(prompts_templates),
@@ -91,7 +91,7 @@ def get_prompt_templates(prompt_templates_name,
   return prompts_templates
 
 
-def _canonicalize(text, *, keep_punctuation_exact_string=None):
+def canonicalize_text(text, *, keep_punctuation_exact_string=None):
   """Returns canonicalized `text` (lowercase and puncuation removed).
 
   Args:

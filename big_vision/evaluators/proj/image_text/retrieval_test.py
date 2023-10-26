@@ -1,4 +1,4 @@
-# Copyright 2022 Big Vision Authors.
+# Copyright 2023 Big Vision Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -21,7 +21,6 @@ from big_vision.pp import ops_general  # pylint: disable=unused-import
 from big_vision.pp import ops_image  # pylint: disable=unused-import
 from big_vision.pp import registry
 import chex
-import flax
 import flax.linen as nn
 import jax
 import jax.numpy as jnp
@@ -153,14 +152,17 @@ class RetrievalTest(tf.test.TestCase):
                              lambda _: info_mock):
         with registry.temporary_ops(copy_from=_get_copy_from):
           evaluator = retrieval.Evaluator(
-              lambda p, i, t: model.apply({"params": p}, i, t),
+              lambda p, b: model.apply({"params": p},
+                                       b.get("image", None),
+                                       b.get("labels", None)),
               dataset="coco_captions",
               batch_size=batch_size,
+              devices=jax.devices(),
               txt_name=("captions", "text"),
               pp_img="copy_from(image='id')",
               pp_txt="copy_from(labels='id')",
           )
-      results = evaluator.evaluate(flax.jax_utils.replicate(params))
+      results = evaluator.evaluate(params)
 
     # Assert all examples were processed.
     self.assertLen(results["images"]["embeddings"], num_examples)

@@ -57,6 +57,13 @@ flags.DEFINE_boolean("cleanup", default=False,
 jax.config.parse_flags_with_absl()
 
 
+def clip(x, *, a_max=None, a_min=None):
+  """Like jnp.clip, but allows all-None to mean don't clip."""
+  if a_max is None and a_min is None:
+    return x
+  return jnp.clip(x, a_max=a_max, a_min=a_min)
+
+
 def all_gather(z, roll=False, only_others=False):
   """All gather and flatten first two dims."""
   def gather_flat(x):
@@ -383,7 +390,7 @@ def main(argv):
         "chrono": u.chrono.save(),
     }
     checkpoint_tree = jax.tree_structure(checkpoint)
-    loaded = u.load_checkpoint(checkpoint_tree, resume_ckpt_path)
+    loaded = u.load_checkpoint_np(resume_ckpt_path, checkpoint_tree)
     # bfloat16 type gets lost when data is saved to disk, so we recover it.
     checkpoint = jax.tree_map(u.recover_dtype, loaded)
     params_cpu, opt_cpu = checkpoint["params"], checkpoint["opt"]

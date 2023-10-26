@@ -1,4 +1,4 @@
-# Copyright 2022 Big Vision Authors.
+# Copyright 2023 Big Vision Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -35,12 +35,11 @@ _BERT_VOCAB = [
 ]
 
 
-def _create_ds(pp_str, tensor_slices, num_examples, remove_tpu_dtypes):
+def _create_ds(pp_str, tensor_slices, num_examples):
   return input_pipeline.make_for_inference(
       tf.data.Dataset.from_tensor_slices(tensor_slices),
       num_ex_per_process=[num_examples],
-      preprocess_fn=pp_builder.get_preprocess_fn(
-          pp_str, remove_tpu_dtypes=remove_tpu_dtypes),
+      preprocess_fn=pp_builder.get_preprocess_fn(pp_str),
       batch_size=num_examples,
   )[0]
 
@@ -53,13 +52,13 @@ class BertOpsTest(tf.test.TestCase):
     with open(vocab_path, "w") as f:
       f.write("\n".join(_BERT_VOCAB))
     pp_str = (
-        f"bert_tokenize(inkey='{inkey}', vocab_path='{vocab_path}', "
-        f"max_len=5)"
+        f"bert_tokenize(inkey='{inkey}', vocab_path='{vocab_path}', max_len=5)"
+        f"|keep('labels')"
     )
     tensor_slices = {
         inkey: tf.ragged.constant([["one more"], ["more than one"], [""]])
     }
-    ds = _create_ds(pp_str, tensor_slices, 3, True)
+    ds = _create_ds(pp_str, tensor_slices, 3)
     self.assertAllEqual(
         next(iter(ds))["labels"],
         [[5, 4, 2, 0, 0], [5, 2, 3, 4, 0], [5, 0, 0, 0, 0]],

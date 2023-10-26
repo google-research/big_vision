@@ -48,6 +48,8 @@ class _Model(nn.Module):
   dropout: float = 0.0
   vocab_size: int = 32_000
   pool_type: str = "last"
+  scan: bool = False
+  remat_policy: str = "nothing_saveable"
 
   @nn.compact
   def __call__(self, text, *, train=False):
@@ -69,7 +71,8 @@ class _Model(nn.Module):
 
     x, encoder_out = vit.Encoder(
         depth=self.depth, mlp_dim=self.mlp_dim, num_heads=self.num_heads,
-        dropout=self.dropout)(x, deterministic=not train)
+        scan=self.scan, remat_policy=self.remat_policy, dropout=self.dropout)(
+            x, deterministic=not train)
 
     out.update({"transformed": x, **encoder_out})
 
@@ -91,7 +94,8 @@ class _Model(nn.Module):
     else:
       raise NotImplementedError(f"Cannot do pooling '{self.pool_type}'")
 
-    x = out["logits"] = nn.Dense(self.num_classes, name="head")(x)
+    if self.num_classes:
+      x = out["logits"] = nn.Dense(self.num_classes, name="head")(x)
     return x, out
 
 
@@ -103,7 +107,7 @@ def Model(num_classes, *, variant=None, **kw):  # pylint: disable=invalid-name
 def load(init_params, init_file, model_cfg, dont_load=()):  # pylint: disable=invalid-name
   """Load init from checkpoint, both old model and this one. +Hi-res posemb."""
   del model_cfg  # unused
-  params = utils.load_params(None, init_file)
+  params = utils.load_params(init_file)
   params = flax.core.unfreeze(
       flax.training.checkpoints.convert_pre_linen(params))
 
