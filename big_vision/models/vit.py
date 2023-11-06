@@ -379,23 +379,45 @@ def pyloop_to_scan(params_pyloop):
   return params_scan
 
 
+def scan_to_pyloop(params_scan):
+  """Converts a lax.scan ViT checkpoint to a python for-loop based one."""
+  # See comment in pyloop_to_scan.
+
+  params_scan = jax.tree_map(lambda x: x, params_scan)  # Structural copy
+  t = params_scan["Transformer"]
+
+  # Find out how many encoderblocks there are
+  depth = len(t["encoderblock"]["LayerNorm_0"]["bias"])
+
+  # Create that many encoderblocks, each with their slice of their sub-pytree.
+  for lyr in range(depth):
+    block = jax.tree_map(lambda x, lyr=lyr: x[lyr], t["encoderblock"])
+    t[f"encoderblock_{lyr}"] = block
+
+  del t["encoderblock"]
+  return params_scan
+
+
 def load(init_params, init_file, model_cfg, dont_load=()):  # pylint: disable=invalid-name because we had to CamelCase above.
   """Load init from checkpoint, both old model and this one. +Hi-res posemb."""
-  del model_cfg
-
   init_file = VANITY_NAMES.get(init_file, init_file)
   restored_params = utils.load_params(init_file)
 
   restored_params = fix_old_checkpoints(restored_params)
 
-  if init_params and "encoderblock" in init_params["Transformer"]:
+  # Detect attempts to load non-scan checkpoint into scan model.
+  if (model_cfg.get("scan") and
+      "encoderblock" not in restored_params["Transformer"]):
     restored_params = pyloop_to_scan(restored_params)
-  # TODO: detect and convert the other way around too.
+  if (not model_cfg.get("scan")
+      and "encoderblock" in restored_params["Transformer"]):
+    restored_params = scan_to_pyloop(restored_params)
 
   # possibly use the random init for some of the params (such as, the head).
   restored_params = common.merge_params(restored_params, init_params, dont_load)
 
   # resample posemb if needed.
+  # TODO: Take this from model_cfg to avoid need for init_params.
   if init_params and "pos_embedding" in init_params:
     restored_params["pos_embedding"] = resample_posemb(
         old=restored_params["pos_embedding"],
@@ -406,7 +428,6 @@ def load(init_params, init_file, model_cfg, dont_load=()):  # pylint: disable=in
 
 # Shortcut names for some canonical paper checkpoints:
 VANITY_NAMES = {
-    # pylint: disable=line-too-long
     # pylint: disable=line-too-long
     # Recommended models from https://arxiv.org/abs/2106.10270
     # Many more models at https://github.com/google-research/vision_transformer
@@ -437,6 +458,16 @@ VANITY_NAMES = {
     "deit3_L_224_21k": "gs://big_vision/zoo/deit3/bv_deit_3_large_224_21k.npz",
     "deit3_L_384_1k": "gs://big_vision/zoo/deit3/bv_deit_3_large_384_1k.npz",
     "deit3_L_384_21k": "gs://big_vision/zoo/deit3/bv_deit_3_large_384_21k.npz",
-    # pylint: disable=line-too-long
+
+    # SigLIP image encoder checkpoints from https://arxiv.org/abs/2303.15343
+    "SigLIP B/16 224": "gs://big_vision/siglip/webli_en_b16_224_63724782.npz:img",
+    "SigLIP B/16 256": "gs://big_vision/siglip/webli_en_b16_256_60500360.npz:img",
+    "SigLIP B/16 384": "gs://big_vision/siglip/webli_en_b16_384_68578854.npz:img",
+    "SigLIP B/16 512": "gs://big_vision/siglip/webli_en_b16_512_68580893.npz:img",
+    "SigLIP L/16 256": "gs://big_vision/siglip/webli_en_l16_256_60552751.npz:img",
+    "SigLIP L/16 384": "gs://big_vision/siglip/webli_en_l16_384_63634585.npz:img",
+    "SigLIP So400m/14 224": "gs://big_vision/siglip/webli_en_so400m_224_57633886.npz:img",
+    "SigLIP So400m/14 384": "gs://big_vision/siglip/webli_en_so400m_384_58765454.npz:img",
+    "SigLIP B/16-i18n 256": "gs://big_vision/siglip/webli_i18n_b16_256_66117334.npz:img",
     # pylint: enable=line-too-long
 }

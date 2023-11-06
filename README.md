@@ -284,9 +284,9 @@ recommended. Below we provide instructions on how to do it.
 First, create some useful variables, which we be reused:
 
 ```
-export NAME="a name of the TPU deployment, e.g. my-tpu-machine"
-export ZONE="GCP geographical zone, e.g. europe-west4-a"
-export GS_BUCKET_NAME="Name of the storage bucket, e.g. my_bucket"
+export NAME=<a name of the TPU deployment, e.g. my-tpu-machine>
+export ZONE=<GCP geographical zone, e.g. europe-west4-a>
+export GS_BUCKET_NAME=<Name of the storage bucket, e.g. my_bucket>
 ```
 
 The following command line will create TPU VMs with 32 cores,
@@ -312,7 +312,11 @@ gcloud compute tpus tpu-vm ssh $NAME --zone=$ZONE --worker=all --command "bash b
 We recommend preparing `tfds` data locally as described above and then uploading
 the data to `Google Cloud` bucket. However, if you prefer, the datasets which
 do not require manual downloads can be prepared automatically using a TPU
-machine as described below.
+machine as described below. Note that TPU machines have only 100 GB of disk
+space, and multihost TPU slices do not allow for external disks to be attached
+in a write mode, so the instructions below may not work for preparing large
+datasets. As yet another alternative, we provide instructions
+[on how to prepare `tfds` data on CPU-only GCP machine](#preparing-tfds-data-on-a-standalone-gcp-cpu-machine).
 
 Specifically, the seven TFDS datasets used during evaluations will be generated
 under `~/tensorflow_datasets` on TPU machine with this command:
@@ -358,17 +362,63 @@ gcloud compute tpus tpu-vm ssh $NAME --zone=$ZONE --worker=all --command "TFDS_D
 ## FSDP training.
 
 `big_vision` supports flexible parameter and model sharding strategies.
-Currently, we support the popular sharding strategy, name FSDP, via a simple config change, see [this config example](big_vision/configs/transfer.py).
-For example, to run FSDP finetuning of a pretrained ViT-L model, run the following command (possibly adjusting batch size depending on your hardware):
+Currently, we support a popular FSDP sharding via a simple config change, see [this config example](big_vision/configs/transfer.py).
+For example, to run FSDP finetuning of a pretrained ViT-L model, run the following command (possible adjusting batch size depending on your hardware):
 
 ```
 gcloud compute tpus tpu-vm ssh $NAME --zone=$ZONE --worker=all --command "TFDS_DATA_DIR=gs://$GS_BUCKET_NAME/tensorflow_datasets bash big_vision/run_tpu.sh big_vision.train --config big_vision/configs/transfer.py:model=vit-i21k-augreg-l/16,dataset=oxford_iiit_pet,crop=resmall_crop,fsdp=True,batch_size=256 --workdir gs://$GS_BUCKET_NAME/big_vision/workdir/`date '+%m-%d_%H%M'` --config.lr=0.03"
 ```
 
+## Image-text training with SigLIP.
+
+A minimal example that uses public `coco` captions data:
+
+```
+gcloud compute tpus tpu-vm ssh $NAME --zone=$ZONE --worker=all --command "TFDS_DATA_DIR=gs://$GS_BUCKET_NAME/tensorflow_datasets bash big_vision/run_tpu.sh big_vision.trainers.proj.image_text.siglip --config big_vision/configs/proj/image_text/siglip_lit_coco.py --workdir gs://$GS_BUCKET_NAME/big_vision/`date '+%Y-%m-%d_%H%M'`"
+```
+
+
+
 ## Sometimes useful gcloud commands
 
 - Destroy the TPU machines: `gcloud compute tpus tpu-vm delete $NAME --zone $ZONE`
 - Remove all big_vision-related folders on all hosts: `gcloud compute tpus tpu-vm ssh $NAME --zone $ZONE --worker=all --command 'rm -rf ~/big_vision ~/bv_venv'`
+
+## Preparing `tfds` data on a standalone GCP CPU machine.
+
+First create a new machine and a disk (feel free to adjust exact machine type and disk settings/capacity):
+
+```
+export NAME_CPU_HOST=<A name of a CPU-only machine>
+export NAME_DISK=<A name of a disk>
+gcloud compute instances create $NAME_CPU_HOST --machine-type c3-standard-22 --zone $ZONE --image-family ubuntu-2204-lts --image-project ubuntu-os-cloud
+gcloud compute disks create $NAME_DISK --size 1000GB --zone $ZONE --type pd-balanced
+```
+
+Now attach the disk to the newly create machine:
+
+```
+gcloud compute instances attach-disk $NAME_CPU_HOST --disk $NAME_DISK --zone $ZONE
+```
+
+Next, `ssh` to the machine `gcloud compute ssh $NAME_CPU_HOST --zone=$ZONE` and
+[follow instructions to format and mount the disk](https://cloud.google.com/compute/docs/disks/format-mount-disk-linux).
+Let's assume it was mounted to `/mnt/disks/tfds`.
+
+Almost there, now clone and set up `big_vision`:
+
+```
+gcloud compute ssh $NAME_CPU_HOST --zone=$ZONE --command "git clone https://github.com/google-research/big_vision.git && cd big_vision && sh big_vision/run_tpu.sh"
+```
+
+Finally, prepare the dataset (e.g. `coco_captions`) using the utility script and
+copy the result to you google cloud bucket:
+
+```
+gcloud compute ssh $NAME_CPU_HOST --zone=$ZONE --command "cd big_vision && TFDS_DATA_DIR=/mnt/disks/tfds/tensorflow_datasets bash big_vision/run_tpu.sh big_vision.tools.download_tfds_datasets coco_captions"
+gcloud compute ssh $NAME_CPU_HOST --zone=$ZONE --command "rm -rf /mnt/disks/tfds/tensorflow_datasets/downloads && gsutil cp -r /mnt/disks/tfds/tensorflow_datasets gs://$GS_BUCKET_NAME"
+```
+
 
 # ViT baseline
 

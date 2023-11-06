@@ -222,7 +222,7 @@ def start_global(data, global_devices, n_prefetch=1):
     sharding = NamedSharding(mesh, P("devices"))
     local_ds = mesh.local_devices
 
-    x = np.asarray(memoryview(x))  # No-copy: http://shortn/_KM5whIEtWI
+    x = np.asarray(memoryview(x))  # No-copy: http://(internal link)
     xs = jax.device_put(np.split(x, len(local_ds), axis=0), local_ds)
 
     global_shape = (x.shape[0] * jax.process_count(), *x.shape[1:])
@@ -237,7 +237,7 @@ def start_global(data, global_devices, n_prefetch=1):
 
 
 def shard_and_put(x, shard=True, put=True):
-  x = np.asarray(memoryview(x))  # No-copy conversion: http://shortn/_KM5whIEtWI
+  x = np.asarray(memoryview(x))  # No-copy conversion: http://(internal link)
   if shard:
     x = einops.rearrange(x, "(d l) ... -> d l ...", d=jax.local_device_count())
   if shard and put:  # Only works for pmap (for now).
