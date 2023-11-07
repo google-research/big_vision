@@ -13,11 +13,14 @@
 # limitations under the License.
 
 # pylint: disable=line-too-long
-r"""A config for pre-training BiT on ImageNet-21k.
+r"""Pre-training ViT on ImageNet-21k as in https://arxiv.org/abs/2106.10270
 
 This config relies on the Imagenet-21k tfds dataset, which is not yet
 available publicly in TFDS. We intend to add the dataset to public TFDS soon,
 and this config will then be runnable.
+
+Note that regularization (dropout, stochastic depth) is not currently
+implemented. This was not beneficial for ImageNet-21k pre-trainning.
 """
 
 import big_vision.configs.common as bvcc
