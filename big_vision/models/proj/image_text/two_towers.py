@@ -93,6 +93,9 @@ class Model(nn.Module):
 def load(init_params, init_files, model_cfg, img_load_kw={}, txt_load_kw={}):  # pylint: disable=dangerous-default-value
   """Loads both towers, `init_files` is now a dict with `img` and `txt` keys."""
   if isinstance(init_files, str):
+    init_files = VANITY_NAMES.get(init_files, init_files)
+
+  if isinstance(init_files, str):
     # A shortcut for a single file checkpoint of a two_towers model.
     if "bias_init" in model_cfg.keys():
       logging.info("loading img, txt, t, and b from a single checkpoint.")
@@ -132,3 +135,20 @@ def load(init_params, init_files, model_cfg, img_load_kw={}, txt_load_kw={}):  #
       f"a typo. Here it is: {init_files}")
 
   return restored_params
+
+
+# Shortcut names for some canonical paper checkpoints:
+VANITY_NAMES = {
+    # pylint: disable=line-too-long
+    # SigLIP image encoder checkpoints from https://arxiv.org/abs/2303.15343
+    "SigLIP B/16 224": "gs://big_vision/siglip/webli_en_b16_224_63724782.npz",
+    "SigLIP B/16 256": "gs://big_vision/siglip/webli_en_b16_256_60500360.npz",
+    "SigLIP B/16 384": "gs://big_vision/siglip/webli_en_b16_384_68578854.npz",
+    "SigLIP B/16 512": "gs://big_vision/siglip/webli_en_b16_512_68580893.npz",
+    "SigLIP L/16 256": "gs://big_vision/siglip/webli_en_l16_256_60552751.npz",
+    "SigLIP L/16 384": "gs://big_vision/siglip/webli_en_l16_384_63634585.npz",
+    "SigLIP So400m/14 224": "gs://big_vision/siglip/webli_en_so400m_224_57633886.npz",
+    "SigLIP So400m/14 384": "gs://big_vision/siglip/webli_en_so400m_384_58765454.npz",
+    "SigLIP B/16-i18n 256": "gs://big_vision/siglip/webli_i18n_b16_256_66117334.npz",
+    # pylint: enable=line-too-long
+}

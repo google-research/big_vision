@@ -210,7 +210,8 @@ def load_params(ckpt, **kw):
     else:
       # Here we're now loading new-style tensorstore checkpoints.
       # We can be a more efficient and load params and `key` only right away.
-      checkpoint = load_checkpoint_ts(ckpt, regex=f"params/{key}/.*")
+      regex = f"params/{key}/.*" if key else "params/.*"
+      checkpoint = load_checkpoint_ts(ckpt, regex=regex)
       params = checkpoint["params"]
 
   if key is not None:

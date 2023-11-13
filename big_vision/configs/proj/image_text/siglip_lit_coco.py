@@ -13,34 +13,13 @@
 # limitations under the License.
 
 # pylint: disable=line-too-long
-r"""Trains a LiT model as in https://arxiv.org/abs/2111.07991
-
-IMPORTANT NOTE: This config uses coco_captions for demonstration purposes. As of
-6/17/22 neither YFCC100M nor CC12M are available in TFDS. We're working on
-publishing these datasets to allow for full replication of the numbers reported
-in the paper.
-
-Published models:
-
-https://github.com/google-research/vision_transformer#lit-models
-
-Colab to load public LiT models:
-https://colab.research.google.com/github/google-research/vision_transformer/blob/main/lit.ipynb
-
-gs://vit_models/lit/LiT-B16B.npz - 72.07% i1k 0shot
-gs://vit_models/lit/LiT-L16L.npz - 75.68% i1k 0shot - missing in publication
+r"""Minimal SigLIP (https://arxiv.org/abs/2303.15343) example.
 
 Example training:
 
-big_vision.trainers.proj.image_text.contrastive \
-    --config big_vision/configs/proj/image_text/lit_coco.py \
-    --workdir gs://[your_bucket]/big_vision/`date '+%Y-%m-%d_%H%M'`
-
-Example evaluation:
-
-big_vision.tools.eval_only \
-    --config big_vision/configs/proj/image_text/lit_coco.py:txt=bert_base,img_head,img=B/16,init=gs://vit_models/lit/LiT-B16B.npz \
-    --workdir gs://[your_bucket]/big_vision/`date '+%Y-%m-%d_%H%M'`
+big_vision.trainers.proj.image_text.siglip \
+    --config big_vision/configs/proj/image_text/lit_coco.py:batch_size=512 \
+    --workdir gs://$GS_BUCKET_NAME/big_vision/`date '+%Y-%m-%d_%H%M'`
 """
 
 import big_vision.configs.common as bvcc
@@ -52,14 +31,14 @@ def get_config(arg=None):
   """The base configuration."""
   arg = bvcc.parse_arg(
       arg, res=224, runlocal=False, token_len=16, txt='bert_base', img='B/16',
-      init='', img_head=False)
+      init='', img_head=False, batch_size=512)
   img_name, img_init = common.inits[arg.img]
   txt_name, txt_init = common.inits[arg.txt]
   config = ConfigDict()
 
   config.input = {}
   config.input.data = dict(name='coco_captions', split='train')
-  config.input.batch_size = 4096 if not arg.runlocal else 32
+  config.input.batch_size = arg.batch_size if not arg.runlocal else 32
   config.input.shuffle_buffer_size = 250_000  if not arg.runlocal else 50
 
   config.total_steps = 5_000 if not arg.runlocal else 1
@@ -77,11 +56,6 @@ def get_config(arg=None):
   config.input.pp = (
       f'decode|resize({arg.res})|flip_lr|randaug(2,10)|value_range(-1,1)'
       f'|flatten|{tokenizer("captions/text")}|keep("image", "labels")'
-  )
-  pp_eval = (
-      f'decode|resize({arg.res})|value_range(-1,1)'
-      f'|flatten|{tokenizer("captions/text")}'
-      '|keep("image", "labels")'
   )
   config.pp_modules = [
       'ops_general', 'ops_image', 'ops_text', 'proj.flaxformer.bert_ops']
@@ -114,6 +88,7 @@ def get_config(arg=None):
   config.model.temperature_init = 10.0
   dim = {'B': 768, 'L': 1024}[arg.img[0]]
   config.model.out_dim = (dim if arg.img_head else None, dim)  # (image_out_dim, text_out_dim)
+  config.model.bias_init = -2.71
 
   if txt_name == 'base':
     config.optax_name = 'scale_by_adam'
@@ -130,48 +105,11 @@ def get_config(arg=None):
 
   config.grad_clip_norm = 1.0
 
-  # Eval section (Both few-shot and zero-shot)
-  eval_common = dict(
-      type='proj.image_text.contrastive',
-      use_global_batch=True,
-      log_steps=500 if not arg.runlocal else 5,
-  )
   config.evals = {}
-  sub = '[:4]' if arg.runlocal else ''
-  config.evals.val = {
-      **eval_common,
-      'data': dict(name=config.input.data.name, split=f'val{sub}'),
-      'pp_fn': pp_eval,
-  }
-  config.evals.coco = {
-      **eval_common,
-      'data': dict(name='coco_captions', split=f'val{sub}'),
-      'pp_fn': (
-          f'decode|resize({arg.res})|value_range(-1,1)'
-          f'|flatten|{tokenizer("captions/text")}|keep("image", "labels")'),
-  }
-  config.evals.imagenet = {
-      **eval_common,
-      'data': dict(name='imagenet2012', split=f'validation{sub}'),
-      'pp_fn': (
-          f'decode|resize({arg.res})|value_range(-1,1)'
-          '|clip_i1k_label_names'
-          f'|{tokenizer("labels")}|keep("image", "labels")'),
-  }
-
-  config.evals.disclf = {}
-  config.evals.disclf.pp_img = f'resize({arg.res})|value_range(-1,1)'
-  config.evals.disclf.pp_txt = tokenizer('texts')
-  config.evals.disclf.type = 'proj.image_text.discriminative_classifier'
-  config.evals.disclf.prefix = 'z/0shot/'
-  config.evals.disclf.log_steps = eval_common['log_steps']
   config.evals.retrieval_coco = common.get_coco(
       pp_img=f'resize({arg.res})|value_range(-1, 1)',
       pp_txt=tokenizer('texts'),
-      log_steps=config.evals.disclf.log_steps,
+      log_steps=1000,
   )
-
-  config.seed = 0
-  config.l = config.m = 0
 
   return config
