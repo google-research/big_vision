@@ -68,7 +68,10 @@ jax.config.update("jax_threefry_partitionable", True)
 def main(argv):
   del argv
 
-  jax.distributed.initialize()
+  try:
+    jax.distributed.initialize()
+  except ValueError as e:
+    logging.warning('Could not initialize distributed environment: %s', e)
 
   # Make sure TF does not touch GPUs.
   tf.config.set_visible_devices([], "GPU")
