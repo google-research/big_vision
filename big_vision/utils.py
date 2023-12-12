@@ -210,7 +210,7 @@ def load_params(ckpt, **kw):
     else:
       # Here we're now loading new-style tensorstore checkpoints.
       # We can be a more efficient and load params and `key` only right away.
-      regex = f"params/{key}/.*" if key else "params/.*"
+      regex = f"params/{key}($|/.*)" if key else "params/.*"
       checkpoint = load_checkpoint_ts(ckpt, regex=regex)
       params = checkpoint["params"]
 
@@ -571,6 +571,7 @@ class Chrono:
       logging.flush()
 
   def flush_timings(self):
+    assert self._measure is not None
     for name, times in self._timing_history.items():
       self._measure(name, np.mean(times))
     self._timing_history.clear()
@@ -939,7 +940,9 @@ def tsload(path, *, tree=None, shardings=None, regex=None):
   names_to_load, _ = zip(*names_and_vals)
 
   if shardings is None:
-    shardings = jax.sharding.SingleDeviceSharding(jax.devices("cpu")[0])
+    shardings = jax.sharding.SingleDeviceSharding(
+        jax.local_devices(backend="cpu")[0]
+    )
   shardings = list(jax.tree_leaves(tree_broadcast(shardings, tree)))
 
   names_to_load = [os.path.join(path, name.replace("/", "~"))
@@ -1319,7 +1322,7 @@ def reshard(tree, shardings):
 
 def put_cpu(x):
   """Places array/pytree on a CPU device."""
-  return jax.device_put(x, jax.devices("cpu")[0])
+  return jax.device_put(x, jax.local_devices(backend="cpu")[0])
 
 
 # TODO: remove this logic when the
@@ -1327,7 +1330,9 @@ def put_cpu(x):
 def jit_cpu(**extra_kwargs):
   def _decorator(fun):
     def _wrapped(*args, **kwargs):
-      sh = jax.sharding.SingleDeviceSharding(jax.devices("cpu")[0])
+      sh = jax.sharding.SingleDeviceSharding(
+          jax.local_devices(backend="cpu")[0]
+      )
       return jax.jit(fun, **extra_kwargs, out_shardings=sh)(*args, **kwargs)
     return _wrapped
   return _decorator

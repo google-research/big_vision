@@ -176,6 +176,17 @@ def get_pp_tokenize(
   return _pp_tokenize
 
 
+@Registry.register("preprocess_ops.coco_captions")
+def get_coco_captions(outkey="captions"):
+  """Extracts coco's captions from nested dict."""
+
+  def _pp_coco_captions(data):
+    data[outkey] = data["captions"]["text"]
+    return data
+
+  return _pp_coco_captions
+
+
 @Registry.register("preprocess_ops.clip_i1k_label_names")
 @utils.InKeyOutKey(indefault="label", outdefault="labels")
 def get_pp_clip_i1k_label_names():
