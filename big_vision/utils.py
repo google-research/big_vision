@@ -1286,7 +1286,7 @@ def tree_broadcast(prefix, target):
 
 
 def reshard(tree, shardings):
-  """Take an *arbitrarily* sharded pytree and shard it according to `shardings`.
+  """Take an arbitrarily* sharded pytree and shard it according to `shardings`.
 
   This is a no-op for tree elements which are already sharded as requested.
 
