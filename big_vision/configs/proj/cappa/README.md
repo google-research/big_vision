@@ -18,7 +18,7 @@ train capable models.
 After setting up `big_vision` as described in the [main README](https://github.com/google-research/big_vision#cloud-tpu-vm-setup), training can be launched as follows
 
 ```
-python big_vision.trainers.proj.cappa.generative \
+python -m big_vision.trainers.proj.cappa.generative \
   --config big_vision/configs/proj/cappa/pretrain.py \
   --workdir gs://$GS_BUCKET_NAME/big_vision/`date '+%m-%d_%H%M'`
 ```
