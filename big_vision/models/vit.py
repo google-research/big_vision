@@ -1,4 +1,4 @@
-# Copyright 2023 Big Vision Authors.
+# Copyright 2024 Big Vision Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -128,19 +128,22 @@ class Encoder(nn.Module):
       block = nn.remat(
           Encoder1DBlock,
           prevent_cse=False,
-          static_argnums=(-1,),
+          static_argnums=(2,),  # 0=self, 2=deterministic
           policy=getattr(jax.checkpoint_policies, self.remat_policy, None),
           )
-      x, _ = nn.scan(block,
-                     variable_axes={"params": 0},
-                     split_rngs={"params": True, "dropout": True},
-                     in_axes=nn.broadcast,
-                     length=self.depth)(
-                         name="encoderblock",
-                         dtype_mm=self.dtype_mm,
-                         mlp_dim=self.mlp_dim,
-                         num_heads=self.num_heads,
-                         dropout=self.dropout)(x, deterministic)
+      x, scan_out = nn.scan(
+          block,
+          variable_axes={"params": 0},
+          split_rngs={"params": True, "dropout": True},
+          in_axes=nn.broadcast,
+          length=self.depth)(
+              name="encoderblock",
+              dtype_mm=self.dtype_mm,
+              mlp_dim=self.mlp_dim,
+              num_heads=self.num_heads,
+              dropout=self.dropout)(x, deterministic)
+      for lyr in range(self.depth):
+        out[f"block{lyr:02d}"] = jax.tree_map(lambda o, l=lyr: o[l], scan_out)
     else:
       # Input Encoder
       for lyr in range(self.depth):
@@ -244,6 +247,8 @@ class _Model(nn.Module):
     elif self.pool_type == "tok":
       x = out["head_input"] = x[:, 0]
       encoded = encoded[:, 1:]
+    elif self.pool_type == "none":
+      pass
     else:
       raise ValueError(f"Unknown pool type: '{self.pool_type}'")
 

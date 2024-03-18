@@ -1,4 +1,4 @@
-# Copyright 2022 Big Vision Authors.
+# Copyright 2024 Big Vision Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -73,7 +73,7 @@ def get_config(arg=None):
   )
   ppv = 'decode|resize_small(256)|central_crop(224)' + pp_common
 
-  config.mixup = dict(p=1.0, n=2)
+  config.mixup = dict(p=1.0)
 
   # Distillation settings
   config.distance = 'kl'

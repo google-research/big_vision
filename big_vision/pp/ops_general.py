@@ -1,4 +1,4 @@
-# Copyright 2023 Big Vision Authors.
+# Copyright 2024 Big Vision Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -18,6 +18,8 @@ All preprocessing ops should return a data processing functors. A data
 is represented as a dictionary of (TF) tensors. The functors output a modified
 dictionary.
 """
+
+import collections
 
 from big_vision.pp import utils
 from big_vision.pp.registry import Registry
@@ -264,19 +266,188 @@ def get_reshape(new_shape):
   return _reshape
 
 
+@Registry.register("preprocess_ops.setdefault")
+def get_setdefault(key, value):
+  """If `key` is an empty tensor, set it to `value`."""
+  def _setdefault(data):
+    x = data[key]
+    v = tf.constant(value, dtype=x.dtype)
+    v = tf.broadcast_to(v, [s or 1 for s in x.shape])
+    data[key] = tf.cond(tf.size(x) > 0, lambda: x, lambda: v)
+    return data
+  return _setdefault
+
+
 @Registry.register("preprocess_ops.choice")
-@utils.InKeyOutKey()
-def get_choice(empty_fallback=None):
-  """Randomly takes one entry out of a tensor after flattening."""
+def get_choice(n="single", key=None, fewer_ok=False, inkey=None, outkey=None):
+  """Chooses the same `n` random entries of all `keys`.
 
-  def _choice(x):
-    x = tf.reshape(x, (-1,))  # Ensure it's a 1D array
+  Args:
+    n: how many entries to randomly sample (without repeat). Possible values:
+      - int: that many entries (or fewer if there's fewer, see `fewer_ok`.)
+      - "single": The string "single" only chooses one and drop the leading dim.
+      - [min, max]: A pair means randomly take between min/max examples (incl.).
+    key: str or list of str: See Note.
+    fewer_ok: whether to fail when there's fewer than `n` elements to choose
+              from (and hence set static shape to `n`), or whether to allow it.
+              (and hence have unknown static shape).
+    inkey: str or list of str: See Note.
+    outkey: str or list of str: See Note.
 
-    # Append the fallback value so we gracefully handle empty cases.
-    x0 = tf.zeros(1, x.dtype) if empty_fallback is None else [empty_fallback]
-    x = tf.concat([x, x0], axis=0)
+  Note:
+    If key/inkey/outkey is a list, then the same random entries are chosen for
+    all of the keys. Other than that, they function the same as InKeyOutKey.
 
-    num_choices = tf.maximum(tf.shape(x)[0] - 1, 1)  # Don't sample x0.
-    return x[tf.random.uniform([], 0, num_choices, dtype=tf.int32)]
+    The outkey can also contain the placeholder `{key}` that'll be .
+
+  Examples:
+    choice(key="alt_text/text")
+    choice(n=128, key=["patches", "positions"])
+    choice(inkey=["questions_i18n", "answers_i18n"], outkey=["q", "a"])
+
+  Returns:
+    The pp op.
+  """
+
+  # Normalize keys:
+  inkeys = utils.maybe_repeat(inkey or key, 1)
+  outkeys = utils.maybe_repeat(outkey or key, 1)
+  outkeys = [ok.format(key=ik) for ok, ik in zip(outkeys, inkeys)]
+
+  # Let's DRY on this condition and give it a name.
+  is_varlen = isinstance(n, (list, tuple))
+  min_n = n[0] if is_varlen else 1 if n == "single" else n
+
+  def _choice(data):
+    nitems = tf.shape(data[inkeys[0]])[0]
+
+    # Sanity check that all keys have same leading dimension, and that is at
+    # least as large as the minimum requested output.
+    lengths = [tf.shape(data[k])[0] for k in inkeys]
+    checks = [tf.debugging.assert_equal(l, nitems) for l in lengths]
+    if not fewer_ok:  # Since we check for all-same, a single suffices here.
+      checks.append(tf.debugging.assert_greater_equal(nitems, min_n))
+    with tf.control_dependencies(checks):
+      nitems = tf.identity(nitems)
+
+    if n == "single":
+      index = tf.random.uniform([], 0, nitems, dtype=tf.int32)
+    else:
+      # Subsample by shuffling and taking first n, but...
+      indices = tf.random.shuffle(tf.range(nitems))
+      end = n
+      if is_varlen:
+        end = tf.random.uniform([], n[0], n[1] + 1, dtype=tf.int32)
+      # ...keep the order while subsampling (it might have a meaning, eg boxes)
+      indices = tf.sort(indices[:end])
+
+    for ik, ok in zip(inkeys, outkeys):
+      if n == "single":
+        result = data[ik][index]
+      else:
+        result = tf.gather(data[ik], indices, axis=0)
+        if not is_varlen:  # Give static shape when we can.
+          result = tf.ensure_shape(result, [n] + [None] * (result.ndim - 1))
+      data[ok] = result
+
+    return data
+  return _choice
+
+
+def _shuffled_index(count, nitems, seed):
+  """Returns index from a shuffled sequence (items only repeat after epoch)."""
+  nitems = tf.cast(nitems, count.dtype)
+  item_epoch, item_offset = (count // nitems, count % nitems)
+  shuffled_indices = tf.random.experimental.stateless_shuffle(
+      tf.range(nitems), seed=tf.random.fold_in(seed, item_epoch))
+  return shuffled_indices[item_offset]
+
+
+@Registry.register("preprocess_ops.choice_no_replacement")
+def get_choice_no_replacement(key=None, inkey=None, outkey=None):
+  """Chooses the same random (no replacement) entry of all `keys`.
+
+  Note: Consider using this for iterating over small datasets with a small
+  number of epochs. It differs from `choice(n='single')` in that if an example,
+  as identified by its `_id` field, is seen N times then it will cycled through
+  all the inkeys values before repeating them. Additionally each repetition uses
+  a different order.
+
+  Caveats: requires dataset to provide a _id field and uses host RAM to keep a
+  counter how often each id is seen. It is also not robust to preemptions.
+
+  Args:
+    key: str or list of str: See Note.
+    inkey: str or list of str: See Note.
+    outkey: str or list of str: See Note.
+
+  Note:
+    If key/inkey/outkey is a list, then the same random entries are chosen for
+    all of the keys. Other than that, they function the same as InKeyOutKey.
+
+    The outkey can also contain the placeholder `{key}` that'll be replaced
+    by the inkey name.
+
+  Examples:
+    choice(key="alt_text/text")
+    choice(key=["patches", "positions"])
+    choice(inkey=["questions_i18n", "answers_i18n"], outkey=["q", "a"])
+
+  Returns:
+    The pp op.
+  """
+  # Normalize keys:
+  inkeys = utils.maybe_repeat(inkey or key, 1)
+  outkeys = utils.maybe_repeat(outkey or key, 1)
+  outkeys = [ok.format(key=ik) for ok, ik in zip(outkeys, inkeys)]
+
+  # TODO: Ideally the data pipeline should provide us with an epoch
+  # counter. For now count how often we see a given example id and don't worry
+  # on memory consumption. Counter returns 0 the first time an example is seen.
+  counter = collections.defaultdict(lambda: -1)
+  def _seen_count(example_id):
+    example_id = example_id.item()
+    counter[example_id] += 1
+    return counter[example_id]
+
+  # We need a seed to deterministically decide on a shuffled sequence and use
+  # the number of times an example was seen to iterate through it. The seed
+  # should be different for every instance of a create preprocessing function
+  # but it has to be fixed for each instance.
+  seed = tf.random.uniform(
+      [2], minval=tf.int32.min, maxval=tf.int32.max, dtype=tf.int32)
+
+  def _choice(data):
+    nitems = tf.shape(data[inkeys[0]])[0]
+
+    # Sanity check that all keys have same leading dimension.
+    checks = [
+        tf.debugging.assert_equal(tf.shape(data[k])[0], nitems)
+        for k in inkeys
+    ]
+    with tf.control_dependencies(checks):
+      nitems = tf.identity(nitems)
+
+    # Using the seed, example id and the number of times an example was seen
+    # pick an `index` such that items are only repeated after all items are seen
+    # an equal number of times. E.g. it could return indexes from this sequence:
+    #   [0, 1, 2, 1, 2, 0, 2, 0, 1, 0, 2, 1, ...].
+    count = tf.numpy_function(
+        _seen_count, (data["_id"],), Tout=tf.int64, stateful=True)
+    count = tf.cast(count, tf.int32)
+    nitems = tf.cast(nitems, tf.int32)
+    shuffle_epoch = count // nitems
+    shuffle_offset = count % nitems
+
+    example_seed = tf.random.fold_in(seed, data["_id"])
+    shuffle_seed = tf.random.fold_in(example_seed, shuffle_epoch)
+    shuffle = tf.random.experimental.stateless_shuffle(
+        tf.range(nitems), seed=shuffle_seed)
+    index = shuffle[shuffle_offset]
+
+    # Select item[index] for all keys.
+    for ik, ok in zip(inkeys, outkeys):
+      data[ok] = data[ik][index]
+    return data
 
   return _choice

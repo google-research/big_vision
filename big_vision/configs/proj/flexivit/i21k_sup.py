@@ -1,4 +1,4 @@
-# Copyright 2022 Big Vision Authors.
+# Copyright 2024 Big Vision Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -52,6 +52,9 @@ def get_config(arg=None):
   c.input.pp = f'decode_jpeg_and_inception_crop({c.res})|flip_lr|randaug(2,10)' + pp_common_i21k
   def pp_eval(res=c.res):
     return f'decode|resize_small({res//7*8})|central_crop({res})'
+
+  # To continue using the near-defunct randaug op.
+  c.pp_modules = ['ops_general', 'ops_image', 'ops_text', 'archive.randaug']
 
   # Aggressive pre-fetching because our models here are small, so we not only
   # can afford it, but we also need it for the smallest models to not be

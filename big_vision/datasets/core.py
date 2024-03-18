@@ -1,4 +1,4 @@
-# Copyright 2023 Big Vision Authors.
+# Copyright 2024 Big Vision Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -46,13 +46,10 @@ class DataSource:
     """Returns number of examples in the dataset, regardless of sharding."""
     raise RuntimeError("not implemented for {self.__class__.__name__}")
 
-  def num_examples_per_process(self, nprocess=None):
+  def num_examples_per_process(self):
     """Returns a list of the numer of examples for each process.
 
     This is only needed for datasets that should go through make_for_inference.
-
-    Args:
-      nprocess: the number of processes, use `jax.process_count()` if None.
 
     Returns:
       Returns a list of the numer of examples for each process.

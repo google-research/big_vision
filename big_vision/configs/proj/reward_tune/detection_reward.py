@@ -1,4 +1,4 @@
-# Copyright 2023 Big Vision Authors.
+# Copyright 2024 Big Vision Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -68,11 +68,11 @@ def loss_fn(params):
   return loss
 ```
 """
+import functools
+
 import einops
 import jax
 import jax.numpy as jnp
-
-xmap = jax.experimental.maps.xmap
 
 
 # Frequency of COCO object detection classes as observed in the training set.
@@ -128,9 +128,10 @@ def iou_fn(box1, box2):
 
   inter = xi * yi
   return inter / (a1 + a2 - inter + 1e-9)
-iou_fn_batched = xmap(iou_fn,
-                      in_axes=({0: "batch1"}, {0: "batch2"}),
-                      out_axes={0: "batch1", 1: "batch2"})
+
+iou_fn_batched = jax.vmap(
+    jax.vmap(iou_fn, in_axes=(None, 0)), in_axes=(0, None)
+)
 
 
 def _reward_fn_thr(seq_pred, seq_gt,
@@ -200,13 +201,16 @@ def reward_fn(seqs_pred, seqs_gt, config):
   correct_thr = config.correct_thr
   r_keys = ["reward", "num_matches", "nms_penalty"]
   for thr in thrs:
-    rewards = xmap(
-        lambda pred, gt: _reward_fn_thr(
-            pred, gt,
-            thr, config.nms_w, config.max_level,  # pylint: disable=cell-var-from-loop
-            config.max_conf, config.num_cls, config.cls_smooth),
-        in_axes=({0: "batch", 1: "samples"}, {0: "batch"}),
-        out_axes={0: "batch", 1: "samples"})(seqs_pred, seqs_gt)
+    fn = functools.partial(
+        _reward_fn_thr,
+        thr=thr,
+        nms_w=config.nms_w,
+        max_level=config.max_level,
+        max_conf=config.max_conf,
+        num_cls=config.num_cls,
+        cls_smooth=config.cls_smooth,
+    )
+    rewards = jax.vmap(jax.vmap(fn, in_axes=(0, None)))(seqs_pred, seqs_gt)
 
     result = {**result, **{f"{k}-{thr:0.1f}": rewards[k]
                            for k in r_keys}}

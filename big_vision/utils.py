@@ -1,4 +1,4 @@
-# Copyright 2023 Big Vision Authors.
+# Copyright 2024 Big Vision Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -554,7 +554,8 @@ class Chrono:
     yield
     dt = time.monotonic() - t0
     if not noop:
-      self._measure(name, dt)
+      if self._measure:  # So that timed things still work in colab.
+        self._measure(name, dt)
       logging.info("TIMING[%s]: %s", name, dt)
       logging.flush()
 
@@ -867,7 +868,7 @@ def save_checkpoint_ts(mngr, checkpoint, path, step, keep=True):
     last = ""
     if gfile.exists(f"{path}-LAST"):
       with gfile.GFile(f"{path}-LAST", "r") as f:
-        last = f.read()
+        last = f.read().strip()
 
     gfile.rename(f"{path}-CUR", f"{path}-LAST", overwrite=True)
 
@@ -893,7 +894,7 @@ def load_checkpoint_ts(path, **tsload_kw):
   try:
     # When passing a general path (not a specific step), get the last available.
     with gfile.GFile(f"{path}-LAST", "r") as f:
-      to_load = f"{path}-{f.read()}"
+      to_load = f"{path}-{f.read().strip()}"
   except Exception:  # Differs based on backend, so blanket catch. pylint:disable=broad-exception-caught
     pass
 
@@ -990,18 +991,23 @@ def steps(prefix, config, data_size=None, batch_size=None, total_steps=None,
   if f"{prefix}_steps" in config:
     return config[f"{prefix}_steps"]
 
+  def to_integer(x):
+    # Round to nearest but always executed at least one step unless explictily
+    # asked for 0. E.g. total_epochs=0 vs total_epochs=0.0001
+    return max(1, round(x)) if x else 0
+
   if batch_size and f"{prefix}_examples" in config:
-    return max(round(config[f"{prefix}_examples"] / batch_size), 1)
+    return to_integer(config[f"{prefix}_examples"] / batch_size)
 
   if batch_size and data_size and f"{prefix}_epochs" in config:
     steps_per_epoch = data_size / batch_size
-    return max(round(config[f"{prefix}_epochs"] * steps_per_epoch), 1)
+    return to_integer(config[f"{prefix}_epochs"] * steps_per_epoch)
 
   if total_steps and f"{prefix}_percent" in config:
     pct = config[f"{prefix}_percent"]
     assert 0.0 <= pct <= 1.0, (  # Be helpful, since it's not obvious.
         f"Percents should lie in [0.0, 1.0], but {prefix}_percent is {pct}")
-    return max(round(pct * total_steps), 1)
+    return to_integer(pct * total_steps)
 
   if default is ValueError:
     raise ValueError(
@@ -1063,10 +1069,17 @@ def create_learning_rate_schedule(
     elif decay_type == "cosine":
       lr = lr * 0.5 * (1. + jnp.cos(jnp.pi * progress))
     elif decay_type == "rsqrt":
-      timescale = kw.get("timescale", 10_000)
-      shift = timescale - warmup_steps
+      # See (internal link) for details, especially how to set timescale
+      # and shift in order to continue smoothly when changing batch-size.
+      if "timescale_examples" in kw:
+        t = kw["timescale_examples"] / batch_size
+      else:
+        t = kw.get("timescale", 10_000)  # bwd-compat default.
+      shift = kw.get("shift", 0)
       lr = jnp.where(
-          warmup_steps < step, lr / jnp.sqrt((step + shift) / timescale), lr)
+          warmup_steps <= step,
+          lr / jnp.sqrt(1 + (step + shift - warmup_steps) / t),  # In decay
+          lr / jnp.sqrt(1 + shift / t))  # In warmup.
     elif decay_type == "stair":
       i = jnp.searchsorted(jnp.array(kw.get("steps", [])), step + 1)
       lr = lr * jnp.take(jnp.array([1.0] + list(kw.get("mults", []))), i)
@@ -1323,6 +1336,63 @@ def reshard(tree, shardings):
 def put_cpu(x):
   """Places array/pytree on a CPU device."""
   return jax.device_put(x, jax.local_devices(backend="cpu")[0])
+
+
+def make_fsarray_from_local_slice(local_slice, global_devices):
+  """Create a fully-sharded global device array from local host arrays.
+
+  Args:
+    local_slice: Something convertible to a numpy array (eg also TF tensors)
+      that is this host's slice of the global array.
+    global_devices: The list of global devices. Needed for consistent ordering.
+
+  Returns:
+    The global on-device array which consists of all local slices stacked
+    together in the order consistent with the devices.
+  """
+  mesh = jax.sharding.Mesh(global_devices, ("devices",))
+  sharding = jax.sharding.NamedSharding(
+      mesh, jax.sharding.PartitionSpec("devices"))
+  local_ds = mesh.local_devices
+
+  x = np.asarray(memoryview(local_slice))  # No-copy: http://(internal link)
+  xs = jax.device_put(np.split(x, len(local_ds), axis=0), local_ds)
+
+  global_shape = (x.shape[0] * jax.process_count(), *x.shape[1:])
+  return jax.make_array_from_single_device_arrays(global_shape, sharding, xs)
+
+
+def get_local_slice_from_fsarray(global_array):
+  """Return numpy array for the host-local slice of fully-sharded array.
+
+  Args:
+    global_array: JAX array, globally sharded on devices across hosts.
+
+  Returns:
+    NumPy array that holds the part of `global_array` that is held by the
+    devices on the host that calls this function.
+  """
+  # For now, for simplicity, we only implement slicing along the first axis.
+  for shard in global_array.addressable_shards:
+    assert all(idx == slice(None) for idx in shard.index[1:]), (
+        f"global_array is sharded along non-first dimensions:\n{shard.index}")
+
+  # Get the shards back in the same order in which the global array was created
+  # in the first place. This makes sure it's consistent with other things in the
+  # batch, for example (assuming the whole batch is consistent).
+  m = {s.device: s for s in global_array.addressable_shards}
+  local_shards = [m[d] for d in global_array.sharding.mesh.local_devices]
+  return np.concatenate([jax.device_get(s.data) for s in local_shards], axis=0)
+
+
+def assert_local_slices_same(*global_arrays):
+  """Check whether all `global_arrays` have local slices at the same indices."""
+  slices = [
+      tuple(
+          tuple((idx.start, idx.end, idx.step) for idx in s.index)
+          for s in a.addressable_shards)
+      for a in global_arrays]
+  assert len(set(slices)) == 1, f"Not all slices are the same: {slices}"
 
 
 # TODO: remove this logic when the

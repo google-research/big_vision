@@ -1,4 +1,4 @@
-# Copyright 2023 Big Vision Authors.
+# Copyright 2024 Big Vision Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -22,7 +22,6 @@ The key named "image" is commonly used for the image, and is a 3D tensor of
 shape (height x width x channels).
 """
 
-from big_vision.pp import autoaugment
 from big_vision.pp import utils
 from big_vision.pp.registry import Registry
 
@@ -339,29 +338,3 @@ def get_clip_value_range():
   def _clip_value_range(image):
     return (tf.cast(image, tf.float32) - mean) / std
   return _clip_value_range
-
-
-@Registry.register("preprocess_ops.randaug")
-@utils.InKeyOutKey()
-def get_randaug(num_layers: int = 2, magnitude: int = 10):
-  """Creates a function that applies RandAugment.
-
-  RandAugment is from the paper https://arxiv.org/abs/1909.13719,
-
-  Args:
-    num_layers: Integer, the number of augmentation transformations to apply
-      sequentially to an image. Represented as (N) in the paper. Usually best
-      values will be in the range [1, 3].
-    magnitude: Integer, shared magnitude across all augmentation operations.
-      Represented as (M) in the paper. Usually best values are in the range
-      [5, 30].
-
-  Returns:
-    a function that applies RandAugment.
-  """
-
-  def _randaug(image):
-    return autoaugment.distort_image_with_randaugment(
-        image, num_layers, magnitude)
-
-  return _randaug

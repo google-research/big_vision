@@ -1,4 +1,4 @@
-# Copyright 2022 Big Vision Authors.
+# Copyright 2024 Big Vision Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -20,7 +20,7 @@ to only make minimal changes in a fork of that file. However, this feature
 does not really make sense for FlexiViT.
 """
 # pylint: disable=consider-using-from-import
-from functools import partial
+import functools
 import importlib
 import multiprocessing.pool
 import os
@@ -162,7 +162,7 @@ def main(argv):
   # be sent there later as needed, otherwise we already encountered two
   # situations where we allocate them twice.
   def get_init(model, name):
-    @partial(jax.jit, backend="cpu")
+    @functools.partial(jax.jit, backend="cpu")
     def _init(rng):
       bs = batch_size // jax.device_count()
       img_size = tuple(getfirst(train_ds.element_spec, name, "image").shape[1:])
@@ -231,8 +231,8 @@ def main(argv):
 
   flexi_argnames = sorted(config.flexi)
 
-  @partial(jax.pmap, axis_name="batch", donate_argnums=(0, 1),
-           static_broadcasted_argnums=tuple(range(4, 4 + len(flexi_argnames))))
+  @functools.partial(jax.pmap, axis_name="batch", donate_argnums=(0, 1),
+                     static_broadcasted_argnums=tuple(range(4, 4 + len(flexi_argnames))))
   def update_fn(params, opt, rng, data, *args):
     """Update step."""
 
@@ -298,7 +298,7 @@ def main(argv):
         "chrono": u.chrono.save(),
     }
     checkpoint_tree = jax.tree_structure(checkpoint)
-    loaded = u.load_checkpoint(checkpoint_tree, resume_ckpt_path)
+    loaded = u.load_checkpoint_np(resume_ckpt_path, checkpoint_tree)
     # bfloat16 type gets lost when data is saved to disk, so we recover it.
     checkpoint = jax.tree_map(u.recover_dtype, loaded)
     params_cpu["student"], opt_cpu = checkpoint["params"], checkpoint["opt"]
@@ -321,10 +321,6 @@ def main(argv):
   params_repl = flax.jax_utils.replicate(params_cpu)
   opt_repl = flax.jax_utils.replicate(opt_cpu)
 
-  # Initializing evaluators later when they are first needed, so we can see
-  # issues with training faster.
-  evaluators = None
-
   # Define predict functions that the evaluators can use:
   def predict_fn(params, *, name, **kw):
     image = kw.pop(name, kw.pop("image", None))
@@ -334,11 +330,12 @@ def main(argv):
     return models[name].apply({"params": params[name]}, image, **kw)
 
   # 1. One for each variant of the student
-  student_pfns = flexi.mkpredictfns(partial(predict_fn, name="student"),
-                                    config.flexi, "student_{x}")
+  student_pfns = flexi.mkpredictfns(
+      functools.partial(predict_fn, name="student"), config.flexi, "student_{x}"
+  )
   # 2. One per teacher model
   teacher_pfns = {
-      name: partial(predict_fn, name=name)
+      name: functools.partial(predict_fn, name=name)
       for name in config.teachers
   }
   # 3. One for each (student-variant, teacher) pair, eg for distance eval.
@@ -350,11 +347,32 @@ def main(argv):
 
   predict_fns = {**student_pfns, **teacher_pfns, **combined_pfns}
 
+  @functools.cache
+  def evaluators():
+    return eval_common.from_config(
+        config, predict_fns,
+        lambda s: write_note(f"Init evaluator: {s}…\n{u.chrono.note}"),
+        lambda key, cfg: get_steps(key, default=None, cfg=cfg),
+    )
+
   rng, rng_loop = jax.random.split(rng, 2)
   rngs_loop = flax.jax_utils.replicate(rng_loop)
   ckpt_writer = None
 
   write_note(f"First step compilations...\n{u.chrono.note}")
+
+  # Note that training can be pre-empted during the final evaluation (i.e.
+  # just after the final checkpoint has been written to disc), in which case we
+  # want to run the evals.
+  if first_step in (total_steps, 0):
+    mw.step_start(first_step)
+    for (name, evaluator, _, prefix) in evaluators():
+      if config.evals[name].get("skip_first") and first_step != total_steps:
+        continue
+      write_note(f"{name} evaluation...\n{u.chrono.note}")
+      with u.chrono.log_timing(f"z/secs/eval/{name}"):
+        for key, value in evaluator.run(params_repl):
+          mw.measure(f"{prefix}{key}", value)
 
   # Using a python integer for step here, because opt.state.step is allocated
   # on TPU during replication.
@@ -413,14 +431,8 @@ def main(argv):
           u.save_checkpoint, (ckpt, save_ckpt_path, copy_step))
       u.chrono.resume()
 
-    if evaluators is None:
-      evaluators = eval_common.from_config(
-          config, predict_fns,
-          lambda s: write_note(f"Init evaluator: {s}…\n{u.chrono.note}"),
-          lambda key, cfg: get_steps(key, default=None, cfg=cfg),
-      )
-    for (name, evaluator, log_steps, prefix) in evaluators:
-      if u.itstime(step, log_steps, total_steps):
+    for (name, evaluator, log_steps, prefix) in evaluators():
+      if u.itstime(step, log_steps, total_steps, first=False, last=True):
         u.chrono.pause(wait_for=params_repl)
         u.chrono.tick(step)  # Record things like epoch number, core hours etc.
         write_note(f"{name} evaluation...\n{u.chrono.note}")

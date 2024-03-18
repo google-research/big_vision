@@ -1,4 +1,4 @@
-# Copyright 2023 Big Vision Authors.
+# Copyright 2024 Big Vision Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -178,8 +178,9 @@ def get_config(arg=None):
 
   _set_model(config, arg.model)
   if arg.fsdp:
-    config.param_sharding = 'fully_sharded'
-    config.optim_sharding = 'fully_sharded'
+    config.mesh = [('data', -1)]
+    config.sharding_strategy = [('.*', 'fsdp(axis="data")')]
+    config.sharding_rules = [('act_batch', ('data',))]
     config.model.scan = True
 
   return config

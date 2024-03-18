@@ -1,4 +1,4 @@
-# Copyright 2022 Big Vision Authors.
+# Copyright 2024 Big Vision Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -191,7 +191,7 @@ def Model(num_classes, *, variant=None, **kw):  # pylint: disable=invalid-name
 def load(init_params, init_file, model_cfg, dont_load=()):  # pylint: disable=invalid-name because we had to CamelCase above.
   """Load init from checkpoint, both old model and this one. +Hi-res posemb."""
   init_file = {**vit.VANITY_NAMES, **VANITY_NAMES}.get(init_file, init_file)
-  restored_params = utils.load_params(None, init_file)
+  restored_params = utils.load_params(init_file)
 
   restored_params = vit.fix_old_checkpoints(restored_params)
 

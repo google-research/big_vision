@@ -1,4 +1,4 @@
-# Copyright 2023 Big Vision Authors.
+# Copyright 2024 Big Vision Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -33,7 +33,6 @@ import big_vision.optax as bv_optax
 import big_vision.sharding as bv_sharding
 import big_vision.utils as u
 from clu import parameter_overview
-import flax
 import flax.linen as nn
 import jax
 from jax.experimental import mesh_utils
@@ -67,6 +66,10 @@ jax.config.update("jax_transfer_guard", "disallow")
 jax.config.update("jax_threefry_partitionable", True)
 
 
+NamedSharding = jax.sharding.NamedSharding
+P = jax.sharding.PartitionSpec
+
+
 def main(argv):
   del argv
 
@@ -75,10 +78,7 @@ def main(argv):
   # Make sure TF does not touch GPUs.
   tf.config.set_visible_devices([], "GPU")
 
-  # Consistent device order is important to ensure correctness of various train
-  # loop components, such as input pipeline, update step, evaluators. We use
-  # jax utils to infer device order that will be used throughout the program.
-  devices = mesh_utils.create_device_mesh((jax.device_count(),))
+  config = flags.FLAGS.config
 
 ################################################################################
 #                                                                              #
@@ -87,7 +87,6 @@ def main(argv):
 ################################################################################
 
   # Set up work directory and print welcome message.
-  config = flags.FLAGS.config
   workdir = flags.FLAGS.workdir
   logging.info(
       f"\u001b[33mHello from process {jax.process_index()} holding "
@@ -117,6 +116,36 @@ def main(argv):
 
   mw = u.BigVisionMetricWriter(xid, wid, workdir, config)
 
+  # Allow for things like timings as early as possible!
+  u.chrono.inform(measure=mw.measure, write_note=write_note)
+
+################################################################################
+#                                                                              #
+#                                Set up Mesh                                   #
+#                                                                              #
+################################################################################
+
+  # We rely on jax mesh_utils to organize devices, such that communication
+  # speed is the fastest for the last dimension, second fastest for the
+  # penultimate dimension, etc.
+  config_mesh = config.get("mesh", [("data", jax.device_count())])
+
+  # Sharding rules with default
+  sharding_rules = config.get("sharding_rules", [("act_batch", "data")])
+
+  mesh_axes, mesh_size = tuple(zip(*config_mesh))
+
+  # Because jax.utils do not support `-1` shape size.
+  mesh_size = np.array(jax.devices()).reshape(mesh_size).shape
+
+  device_mesh = mesh_utils.create_device_mesh(mesh_size)
+
+  # Consistent device order is important to ensure correctness of various train
+  # loop components, such as input pipeline, update step, evaluators. The
+  # order presribed by the `devices_flat` variable should be used throughout
+  # the program.
+  devices_flat = device_mesh.flatten()
+
 ################################################################################
 #                                                                              #
 #                                Input Pipeline                                #
@@ -141,15 +170,14 @@ def main(argv):
     return u.steps(name, cfg, ntrain_img, batch_size, total_steps, default)
 
   u.chrono.inform(total_steps=total_steps, global_bs=batch_size,
-                  steps_per_epoch=ntrain_img / batch_size,
-                  measure=mw.measure, write_note=write_note)
+                  steps_per_epoch=ntrain_img / batch_size)
 
   info("Running for %d steps, that means %f epochs",
        total_steps, total_steps * batch_size / ntrain_img)
 
   # Start input pipeline as early as possible.
   n_prefetch = config.get("prefetch_to_device", 1)
-  train_iter = input_pipeline.start_global(train_ds, devices, n_prefetch)
+  train_iter = input_pipeline.start_global(train_ds, devices_flat, n_prefetch)
 
 ################################################################################
 #                                                                              #
@@ -163,10 +191,9 @@ def main(argv):
       num_classes=config.num_classes, **config.get("model", {}))
 
   def init(rng):
-    bs = batch_size // jax.device_count()
-    image_size = tuple(train_ds.element_spec["image"].shape[1:])
-    no_image = jnp.zeros((bs,) + image_size, jnp.float32)
-    params = flax.core.unfreeze(model.init(rng, no_image))["params"]
+    batch = jax.tree_map(lambda x: jnp.zeros(x.shape, x.dtype.as_numpy_dtype),
+                         train_ds.element_spec)
+    params = model.init(rng, batch["image"])["params"]
 
     # Set bias in the head to a low value, such that loss is small initially.
     if "init_head_bias" in config:
@@ -186,7 +213,7 @@ def main(argv):
   params_shape = jax.eval_shape(init, rng_init)
 
   write_note("Inferring optimizer state shapes...")
-  tx, sched_fns = bv_optax.make(config, params_shape, sched_kw=dict(
+  tx, sched_fns = bv_optax.make(config, nn.unbox(params_shape), sched_kw=dict(
       total_steps=total_steps, batch_size=batch_size, data_size=ntrain_img))
   opt_shape = jax.eval_shape(tx.init, params_shape)
   # We jit this, such that the arrays are created on the CPU, not device[0].
@@ -202,30 +229,25 @@ def main(argv):
 #                                                                              #
 ################################################################################
 
-  # Currently we support a simple 1D mesh only, this may change in the future.
-  # 1D mesh is sufficient to implement data-parallel training, ZERO2 and
-  # fully-sharded data-parallel (fsdp) training.
   write_note("Creating device mesh...")
-  mesh = jax.sharding.Mesh(devices, ("data",))
-  repl_sharding = jax.sharding.NamedSharding(mesh, jax.sharding.PartitionSpec())
+  mesh = jax.sharding.Mesh(device_mesh, mesh_axes)
+  repl_sharding = jax.sharding.NamedSharding(mesh, P())
 
   write_note("Inferring shardings...")
-  params_sharding = bv_sharding.infer_sharding(
-      params_shape, mesh, axis_name="data",
-      strategy=config.get("param_sharding", "replicated"),
-      extra_strategy_args=config.get("param_sharding_args", {}))
-  opt_sharding = bv_sharding.infer_sharding(
-      opt_shape, mesh, axis_name="data",
-      strategy=config.get("optim_sharding", "replicated"),
-      extra_strategy_args=config.get("optim_sharding_args", {}))
+  train_state_shape = {"params": params_shape, "opt": opt_shape}
+
+  strategy = config.get("sharding_strategy", [(".*", "replicate")])
+  with nn.logical_axis_rules(sharding_rules):
+    train_state_sharding = bv_sharding.infer_sharding(
+        train_state_shape, strategy=strategy, mesh=mesh)
 
   write_note("Transferring train_state to devices...")
   # RNG is always replicated
   rng_init = u.reshard(rng_init, repl_sharding)
 
   # Parameters and the optimizer are now global (distributed) jax arrays.
-  params = jax.jit(init, out_shardings=params_sharding)(rng_init)
-  opt = jax.jit(tx.init, out_shardings=opt_sharding)(params)
+  params = jax.jit(init, out_shardings=train_state_sharding["params"])(rng_init)
+  opt = jax.jit(tx.init, out_shardings=train_state_sharding["opt"])(params)
 
   rng, rng_loop = jax.random.split(rng, 2)
   rng_loop = u.reshard(rng_loop, repl_sharding)
@@ -233,11 +255,9 @@ def main(argv):
 
   # At this point we have everything we need to form a train state. It contains
   # all the parameters that are passed and updated by the main training step.
-  train_state_sharding = {
-      "params": params_sharding, "opt": opt_sharding, "rng": repl_sharding}
-  train_state = {
-      "params": params, "opt": opt, "rng": rng_loop}
-  del params, opt, rng_loop  # Delete to avoid memory leak or accidental reuse.
+  # From here on, we have no need for Flax AxisMetadata (such as partitioning).
+  train_state = nn.unbox({"params": params, "opt": opt})
+  del params, opt  # Delete to avoid memory leak or accidental reuse.
 
   write_note("Logging parameter overview...")
   parameter_overview.log_parameter_overview(
@@ -254,18 +274,20 @@ def main(argv):
       jax.jit,
       donate_argnums=(0,),
       out_shardings=(train_state_sharding, repl_sharding))
-  def update_fn(train_state, batch):
+  def update_fn(train_state, rng, batch):
     """Update step."""
 
     images, labels = batch["image"], batch["labels"]
 
-    rng = train_state["rng"]
+    step_count = bv_optax.get_count(train_state["opt"], jittable=True)
+    rng = jax.random.fold_in(rng, step_count)
+
     if config.get("mixup") and config.mixup.p:
       # The shard_map below makes mixup run on every device independently and
       # thus avoids unnecessary communication.
-      P = jax.sharding.PartitionSpec  # pylint: disable=invalid-name
       sharded_mixup_fn = shard_map(
-          u.get_mixup(rng, config.mixup.p), mesh=mesh,
+          u.get_mixup(rng, config.mixup.p),
+          mesh=jax.sharding.Mesh(devices_flat, ("data",)),
           in_specs=P("data"), out_specs=(P(), P("data"), P("data")))
       rng, (images, labels), _ = sharded_mixup_fn(images, labels)
 
@@ -292,7 +314,7 @@ def main(argv):
     us = jax.tree_leaves(updates)
     measurements["l2_updates"] = jnp.sqrt(sum([jnp.sum(u * u) for u in us]))
 
-    return {"params": params, "opt": opt, "rng": rng}, measurements
+    return {"params": params, "opt": opt}, measurements
 
 ################################################################################
 #                                                                              #
@@ -317,6 +339,8 @@ def main(argv):
 
   if resume_ckpt_path:
     write_note(f"Resuming training from checkpoint {resume_ckpt_path}...")
+    jax.tree_map(lambda x: x.delete(), train_state)
+    del train_state
     shardings = {
         **train_state_sharding,
         "chrono": jax.tree_map(lambda _: repl_sharding,
@@ -324,7 +348,7 @@ def main(argv):
     }
     loaded = u.load_checkpoint_ts(
         resume_ckpt_path, tree=shardings, shardings=shardings)
-    train_state = {key: loaded[key] for key in train_state.keys()}
+    train_state = {key: loaded[key] for key in train_state_sharding.keys()}
 
     u.chrono.load(jax.device_get(loaded["chrono"]))
     del loaded
@@ -378,7 +402,7 @@ def main(argv):
         config, eval_fns,
         lambda s: write_note(f"Init evaluator: {s}…\n{u.chrono.note}"),
         lambda key, cfg: get_steps(key, default=None, cfg=cfg),
-        devices,
+        devices_flat,
     )
 
   # At this point we need to know the current step to see whether to run evals.
@@ -398,7 +422,7 @@ def main(argv):
         continue
       write_note(f"{name} evaluation...\n{u.chrono.note}")
       with u.chrono.log_timing(f"z/secs/eval/{name}"):
-        with mesh, nn.logical_axis_rules([("act_batch", "data")]):
+        with mesh, nn.logical_axis_rules(sharding_rules):
           for key, value in evaluator.run(train_state):
             mw.measure(f"{prefix}{key}", value)
 
@@ -416,8 +440,8 @@ def main(argv):
 
     with jax.profiler.StepTraceAnnotation("train_step", step_num=step):
       with u.chrono.log_timing("z/secs/update0", noop=step > first_step + 1):
-        with mesh, nn.logical_axis_rules([("act_batch", "data")]):
-          train_state, measurements = update_fn(train_state, batch)
+        with mesh, nn.logical_axis_rules(sharding_rules):
+          train_state, measurements = update_fn(train_state, rng_loop, batch)
 
     # On the first host, let's always profile a handful of early steps.
     if jax.process_index() == 0:
@@ -464,7 +488,7 @@ def main(argv):
         u.chrono.tick(step)  # Record things like epoch number, core hours etc.
         write_note(f"{name} evaluation...\n{u.chrono.note}")
         with u.chrono.log_timing(f"z/secs/eval/{name}"):
-          with mesh, nn.logical_axis_rules([("act_batch", "data")]):
+          with mesh, nn.logical_axis_rules(sharding_rules):
             for key, value in evaluator.run(train_state):
               mw.measure(f"{prefix}{key}", jax.device_get(value))
         u.chrono.resume()

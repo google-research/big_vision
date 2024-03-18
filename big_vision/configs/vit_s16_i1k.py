@@ -1,4 +1,4 @@
-# Copyright 2023 Big Vision Authors.
+# Copyright 2024 Big Vision Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -58,6 +58,9 @@ def get_config():
       pp_common.format(lbl='label')
   )
   pp_eval = 'decode|resize_small(256)|central_crop(224)' + pp_common
+
+  # To continue using the near-defunct randaug op.
+  config.pp_modules = ['ops_general', 'ops_image', 'ops_text', 'archive.randaug']
 
   config.log_training_steps = 50
   config.ckpt_steps = 1000

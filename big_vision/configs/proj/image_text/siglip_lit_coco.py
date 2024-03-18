@@ -1,4 +1,4 @@
-# Copyright 2023 Big Vision Authors.
+# Copyright 2024 Big Vision Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -57,8 +57,8 @@ def get_config(arg=None):
       f'decode|resize({arg.res})|flip_lr|randaug(2,10)|value_range(-1,1)'
       f'|flatten|{tokenizer("captions/text")}|keep("image", "labels")'
   )
-  config.pp_modules = [
-      'ops_general', 'ops_image', 'ops_text', 'proj.flaxformer.bert_ops']
+  config.pp_modules = ['ops_general', 'ops_image', 'ops_text',
+                       'proj.flaxformer.bert_ops', 'archive.randaug']
 
   config.log_training_steps = 50
   config.ckpt_steps = 1000

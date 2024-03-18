@@ -1,4 +1,4 @@
-# Copyright 2023 Big Vision Authors.
+# Copyright 2024 Big Vision Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -18,7 +18,7 @@ from collections import abc
 
 
 def maybe_repeat(arg, n_reps):
-  if not isinstance(arg, abc.Sequence):
+  if not isinstance(arg, abc.Sequence) or isinstance(arg, str):
     arg = (arg,) * n_reps
   return arg
 
