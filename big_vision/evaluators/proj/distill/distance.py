@@ -1,4 +1,4 @@
-# Copyright 2022 Big Vision Authors.
+# Copyright 2024 Big Vision Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -23,7 +23,13 @@ import big_vision.utils as u
 import einops
 import jax
 import jax.numpy as jnp
+from jax.sharding import NamedSharding
+from jax.sharding import PartitionSpec as P
 import numpy as np
+
+# Temporary global flag to facilitate backwards compatability. Will be removed
+# by the end of year 2023.
+API = 'jit'
 
 
 def dist(student, teacher, kind, feat_axis=-1,
@@ -69,11 +75,11 @@ def get_dist_fn(**kw):
 # To avoid re-compiling the function for every new instance of the same
 # evaluator on a different dataset!
 @lru_cache(None)
-def get_eval_fn(student_teacher_fwd, what, distances):
+def get_eval_fn(student_teacher_fwd, what, mesh, distances):
   """Produces eval function, also applies pmap."""
-  @partial(jax.pmap, axis_name='batch')
-  def _eval_fn(params, batch, mask):
-    (_, out_s), (_, out_t) = student_teacher_fwd(params, **batch)
+  @partial(jax.jit, out_shardings=NamedSharding(mesh, P()))
+  def _eval_fn(train_state, batch, mask):
+    (_, out_s), (_, out_t) = student_teacher_fwd(train_state, batch)
     repr_s = u.tree_get(out_s, what[0])
     repr_t = u.tree_get(out_t, what[1])
 
@@ -86,42 +92,57 @@ def get_eval_fn(student_teacher_fwd, what, distances):
     #       can change to compute and return summary stats later on.
     for dist_fn in distances:
       ds = dist_fn(repr_s, repr_t)
-      all_ds.append(jax.lax.all_gather(ds, axis_name='batch'))
-    all_masks = jax.lax.all_gather(mask, axis_name='batch')
+      all_ds.append(ds)
+    all_masks = mask
     return all_ds, all_masks
+
   return _eval_fn
 
 
 class Evaluator:
   """Distillation distance evaluator."""
 
-  def __init__(self, student_teacher_fwd, data, pp_fn, distances,
-               what=('logits', 'logits'), **data_kw):
+  def __init__(
+      self,
+      student_teacher_fwd,
+      data,
+      pp_fn,
+      distances,
+      what=('logits', 'logits'),
+      *,
+      devices,
+      **data_kw,
+  ):
     data = ds_core.get(**data)
     pp_fn = pp_builder.get_preprocess_fn(pp_fn)
     prefetch = data_kw.pop('prefetch', 1)
     self.ds, self.steps = input_pipeline.make_for_inference(
-        data.get_tfdata(ordered=True), pp_fn,
-        num_ex_per_process=data.num_examples_per_process(), **data_kw)
-    self.data_iter = input_pipeline.start_input_pipeline(self.ds, prefetch)
+        data.get_tfdata(ordered=True),
+        pp_fn,
+        num_ex_per_process=data.num_examples_per_process(),
+        **data_kw,
+    )
+    self.data_iter = input_pipeline.start_global(self.ds, devices, prefetch)
     dist_fns = tuple(get_dist_fn(**dist) for dist in distances)
     self.dist_names = [
-        '_'.join(f'{k}={v}' for k, v in dist.items()) for dist in distances]
-    self.eval_fn = get_eval_fn(student_teacher_fwd, what, dist_fns)
+        '_'.join(f'{k}={v}' for k, v in dist.items()) for dist in distances
+    ]
+    mesh = jax.sharding.Mesh(devices, ('data',))
+    self.eval_fn = get_eval_fn(student_teacher_fwd, what, mesh, dist_fns)
 
-  def run(self, params):
+  def run(self, train_state):
     """Computes all metrics."""
     all_ds = [[] for _ in self.dist_names]
     for _, batch in zip(range(self.steps), self.data_iter):
       mask = batch.pop('_mask')
-      batch_ds, batch_ms = self.eval_fn(params, batch, mask)
+      batch_ds, batch_ms = self.eval_fn(train_state, batch, mask)
       # All results are a replicated array shaped as follows:
       # (local_devices, per_device_batch_size, elem_shape...)
       # with each local device's entry being identical.
       # So let's just take the first one to the host as numpy.
-      batch_ms = np.array(batch_ms[0]).flatten()
+      batch_ms = np.array(batch_ms)
       for i, val in enumerate(batch_ds):
-        all_ds[i].append(np.array(val[0]).flatten()[batch_ms == 1])
+        all_ds[i].append(np.array(val)[batch_ms == 1])
     for name, ds in zip(self.dist_names, all_ds):
       ds = np.concatenate(ds)
       yield f'{name}/all', ds

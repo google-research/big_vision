@@ -1,4 +1,4 @@
-# Copyright 2022 Big Vision Authors.
+# Copyright 2024 Big Vision Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -28,7 +28,6 @@ from clu import parameter_overview
 import flax
 import flax.jax_utils as flax_utils
 import jax
-import jax.config
 import jax.numpy as jnp
 from ml_collections import config_flags
 from tensorflow.io import gfile

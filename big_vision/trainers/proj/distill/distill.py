@@ -1,4 +1,4 @@
-# Copyright 2022 Big Vision Authors.
+# Copyright 2024 Big Vision Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -42,7 +42,10 @@ import big_vision.utils as u
 from clu import parameter_overview
 import flax
 import jax
+from jax.experimental import mesh_utils
 import jax.numpy as jnp
+from jax.sharding import NamedSharding
+from jax.sharding import PartitionSpec as P
 from ml_collections import config_flags
 import numpy as np
 import optax
@@ -62,6 +65,8 @@ flags.DEFINE_boolean("cleanup", default=False,
 
 # Adds jax flags to the program.
 jax.config.parse_flags_with_absl()
+# Fixes design flaw in jax.random that may cause unnecessary d2d comms.
+jax.config.update("jax_threefry_partitionable", True)
 
 
 def getfirst(d, *keys):
@@ -130,12 +135,16 @@ def main(argv):
   # First thing after above sanity checks, so we can log "start" ticks.
   mw = u.BigVisionMetricWriter(xid, wid, workdir, config)
 
+  devices = mesh_utils.create_device_mesh((jax.device_count(),))
+  mesh = jax.sharding.Mesh(devices, ("data",))
+  repl_sharding = NamedSharding(mesh, P())
+
   write_note("Initializing train dataset...")
   train_ds, ntrain_img = input_pipeline.training(config.input)
 
   # Start prefetching already.
   n_prefetch = config.get("prefetch_to_device", 1)
-  train_iter = input_pipeline.start_input_pipeline(train_ds, n_prefetch)
+  train_iter = input_pipeline.start_global(train_ds, devices, n_prefetch)
 
   total_steps = u.steps("total", config, ntrain_img, batch_size)
   def get_steps(name, default=ValueError, cfg=config):
@@ -238,7 +247,9 @@ def main(argv):
     outputs = (measurements["distill_loss"], measurements)
     return jax.tree_map(jnp.mean, outputs)
 
-  @functools.partial(jax.pmap, axis_name="batch", donate_argnums=(0, 1))
+  @functools.partial(
+      jax.jit, donate_argnums=(0, 1, 2), out_shardings=repl_sharding
+  )
   def update_fn(params, opt, rng, data):
     """Update step."""
 
@@ -249,18 +260,16 @@ def main(argv):
       rng, _, to_mix = u.mixup(rng, **config.mixup, **to_mix)
       data = {**data, **to_mix}
 
-    # Get device-specific loss rng.
+    # Get model-specific loss rng.
     rng, *rng_models = jax.random.split(rng, len(models) + 1)
-    rngs_models_local = {
-        name: {"dropout": jax.random.fold_in(rngi, jax.lax.axis_index("batch"))}
-        for name, rngi in zip(models, rng_models)
+    rngs_model_dicts = {
+        name: {"dropout": rngi} for name, rngi in zip(models, rng_models)
     }
 
     w = params["student"]  # Need to explicitly pull out the optimized ones.
-    (l, measurements), grads = jax.lax.pmean(
-        jax.value_and_grad(loss_fn, has_aux=True)(
-            w, params, data, rngs=rngs_models_local),
-        axis_name="batch")
+    (l, measurements), grads = jax.value_and_grad(loss_fn, has_aux=True)(
+        w, params, data, rngs=rngs_model_dicts
+    )
     updates, opt = tx.update(grads, opt, w)
     w = optax.apply_updates(w, updates)
     params["student"] = w
@@ -303,7 +312,7 @@ def main(argv):
         "chrono": u.chrono.save(),
     }
     checkpoint_tree = jax.tree_structure(checkpoint)
-    loaded = u.load_checkpoint(checkpoint_tree, resume_ckpt_path)
+    loaded = u.load_checkpoint_np(resume_ckpt_path, checkpoint_tree)
     # bfloat16 type gets lost when data is saved to disk, so we recover it.
     checkpoint = jax.tree_map(u.recover_dtype, loaded)
     params_cpu["student"], opt_cpu = checkpoint["params"], checkpoint["opt"]
@@ -323,29 +332,29 @@ def main(argv):
   prof = None  # Keeps track of start/stop of profiler state.
 
   write_note(f"Replicating...\n{u.chrono.note}")
-  params_repl = flax.jax_utils.replicate(params_cpu)
-  opt_repl = flax.jax_utils.replicate(opt_cpu)
+  params_repl = u.reshard(params_cpu, repl_sharding)
+  opt_repl = u.reshard(opt_cpu, repl_sharding)
 
   # Define predict functions that the evaluators can use:
   # 1. One per model
   predict_fns = {}
   for name, model in models.items():
-    def fwd(params, image, n=name, m=model):
-      return m.apply({"params": params[n]}, image)
+    def fwd(train_state, batch, n=name, m=model):
+      return m.apply({"params": train_state["params"][n]}, batch["image"])
     predict_fns[f"{name}_fwd"] = fwd
   # 2. One for the ensemble of all teachers.
-  def teacher_ensemble_fwd(params, image):
+  def teacher_ensemble_fwd(train_state, batch):
     all_teacher_logits = [
-        models[name].apply(params[name], image)[0]  # return is `logits, out`
+        models[name].apply(train_state["params"][name], batch["image"])[0]
         for name in config.teachers
     ]
-    return jnp.mean([jax.nn.softmax(l) for l in all_teacher_logits], axis=0), {}
+    return jnp.mean([jax.nn.softmax(l) for l in all_teacher_logits], axis=0), {}  # pytype: disable=wrong-arg-types  # jnp-type
   predict_fns["teacher_ensemble_fwd"] = teacher_ensemble_fwd
   # 3.One for each (student, teacher) pair, eg for distance eval.
   for name in [*config.teachers, "teacher_ensemble"]:
-    def fwd(params, image, n=name):  # pylint: disable=function-redefined
-      student_ret = predict_fns["student_fwd"](params, image)
-      teacher_ret = predict_fns[f"{n}_fwd"](params, image)
+    def fwd(train_state, batch, n=name):  # pylint: disable=function-redefined
+      student_ret = predict_fns["student_fwd"](train_state, batch)
+      teacher_ret = predict_fns[f"{n}_fwd"](train_state, batch)
       return student_ret, teacher_ret
     predict_fns[f"student_{name}_fwd"] = fwd
 
@@ -353,16 +362,31 @@ def main(argv):
   @functools.lru_cache(maxsize=None)
   def evaluators():
     return eval_common.from_config(
-        config, predict_fns,
+        config,
+        predict_fns,
         lambda s: write_note(f"Init evaluator: {s}…\n{u.chrono.note}"),
         lambda key, cfg: get_steps(key, default=None, cfg=cfg),
+        devices,
     )
 
   rng, rng_loop = jax.random.split(rng, 2)
-  rngs_loop = flax.jax_utils.replicate(rng_loop)
+  rngs_loop = u.reshard(rng_loop, repl_sharding)
   ckpt_writer = None
 
   write_note(f"First step compilations...\n{u.chrono.note}")
+
+  # Note that training can be pre-empted during the final evaluation (i.e.
+  # just after the final checkpoint has been written to disc), in which case we
+  # want to run the evals.
+  if first_step in (total_steps, 0):
+    mw.step_start(first_step)
+    for (name, evaluator, _, prefix) in evaluators():
+      if config.evals[name].get("skip_first") and first_step != total_steps:
+        continue
+      write_note(f"{name} evaluation...\n{u.chrono.note}")
+      with u.chrono.log_timing(f"z/secs/eval/{name}"):
+        for key, value in evaluator.run({"params": params_repl}):
+          mw.measure(f"{prefix}{key}", value)
 
   # Using a python integer for step here, because opt.state.step is allocated
   # on TPU during replication.
@@ -383,9 +407,9 @@ def main(argv):
         or u.chrono.warmup and jax.process_index() == 0):
       for i, sched_fn_cpu in enumerate(sched_fns_cpu):
         mw.measure(f"global_schedule{i if i else ''}", sched_fn_cpu(step - 1))
-      l = mw.measure("training_loss", loss_value[0])
+      l = mw.measure("training_loss", loss_value)
       for name, value in measurements.items():
-        mw.measure(name, value[0])
+        mw.measure(name, value)
       u.chrono.tick(step)
       if not np.isfinite(l):
         raise RuntimeError(f"The loss became nan or inf somewhere within steps "
@@ -401,7 +425,8 @@ def main(argv):
       # alive while they'll be updated in a future step, creating hard to debug
       # memory errors (see (internal link)). Also, takes device 0's params only.
       params_cpu["student"], opt_cpu = jax.tree_map(
-          lambda x: np.array(x[0]), (params_repl["student"], opt_repl))
+          np.array, (params_repl["student"], opt_repl)
+      )
 
       # Check whether we want to keep a copy of the current checkpoint.
       copy_step = None
@@ -416,25 +441,15 @@ def main(argv):
       u.chrono.resume()
 
     for (name, evaluator, log_steps, prefix) in evaluators():
-      if u.itstime(step, log_steps, total_steps, last=False):
+      if u.itstime(step, log_steps, total_steps, first=False, last=True):
         u.chrono.pause(wait_for=params_repl)
         u.chrono.tick(step)  # Record things like epoch number, core hours etc.
         write_note(f"{name} evaluation...\n{u.chrono.note}")
         with u.chrono.log_timing(f"z/secs/eval/{name}"):
-          for key, value in evaluator.run(params_repl):
+          for key, value in evaluator.run({"params": params_repl}):
             mw.measure(f"{prefix}{key}", value)
         u.chrono.resume()
     mw.step_end()
-
-  # Run evals after done with training. Running them here guarantees evals
-  # will run if job is restarted after writting the last checkpoint and
-  # also supports eval only runs (when total_steps or num_epochs is 0).
-  mw.step_start(total_steps)
-  for (name, evaluator, _, prefix) in evaluators():
-    write_note(f"{name} evaluation...\n{u.chrono.note}")
-    with u.chrono.log_timing(f"z/secs/eval/{name}"):
-      for key, value in evaluator.run(params_repl):
-        mw.measure(f"{prefix}{key}", value)
 
   # Always give a chance to stop the profiler, no matter how things ended.
   # TODO: can we also do this when dying of an exception like OOM?

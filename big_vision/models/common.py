@@ -1,4 +1,4 @@
-# Copyright 2023 Big Vision Authors.
+# Copyright 2024 Big Vision Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -21,7 +21,7 @@ import jax
 import jax.numpy as jnp
 
 
-def merge_params(loaded, inited, dont_load=()):
+def merge_params(loaded, inited, dont_load=(), match_dtype=False):
   """Makes `loaded` pytree match `init`, warning or failing on mismatch.
 
   Args:
@@ -30,6 +30,7 @@ def merge_params(loaded, inited, dont_load=()):
     dont_load: List of regexes for parameters which shall not be taken
       from `loaded`, either because they should remain at their init value,
       or because they are missing on either side.
+    match_dtype: returned pytree as leaves converted to dtype from `inited`.
 
   Returns:
     If successful, a new pytree which matches the structure of `init`
@@ -57,6 +58,8 @@ def merge_params(loaded, inited, dont_load=()):
     # param is present in both. Load or ignore it!
     if name in loaded_flat and should_merge(name):
       merged[name] = loaded_flat[name]
+      if match_dtype:
+        merged[name] = loaded_flat[name].astype(init_val.dtype)
     else:
       logging.info("Ignoring checkpoint and using init value for %s", name)
       merged[name] = init_val

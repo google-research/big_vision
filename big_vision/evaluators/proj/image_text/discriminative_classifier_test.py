@@ -1,4 +1,4 @@
-# Copyright 2023 Big Vision Authors.
+# Copyright 2024 Big Vision Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -67,7 +67,7 @@ class _Model(nn.Module):
     return z(image), z(texts), None
 
 
-class DiscriminativeClassifierTest(tf.test.TestCase):
+  class DiscriminativeClassifierTest(tf.test.TestCase):
 
   def test_prepare_datasets(self):
 

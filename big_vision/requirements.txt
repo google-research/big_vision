@@ -1,14 +1,16 @@
 numpy>=1.26
 absl-py
 git+https://github.com/google/CommonLoopUtils
+distrax
 einops
 flax
 optax
 git+https://github.com/google/flaxformer
 git+https://github.com/akolesnikoff/panopticapi.git@mute
 overrides
+protobuf
+sentencepiece
 tensorflow-cpu
 tfds-nightly
-tensorflow-addons
 tensorflow-text
 tensorflow-gan

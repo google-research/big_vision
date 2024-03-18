@@ -1,4 +1,4 @@
-# Copyright 2023 Big Vision Authors.
+# Copyright 2024 Big Vision Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -115,11 +115,19 @@ class Registry(object):
     try:
       name, args, kwargs = parse_name(lookup_string)
     except ValueError as e:
-      raise ValueError(f"Error parsing pp:\n{lookup_string}") from e
+      raise ValueError(f"Error parsing:\n{lookup_string}") from e
     if kwargs_extra:
       kwargs.update(kwargs_extra)
     item = Registry.global_registry()[name]
     return functools.partial(item, *args, **kwargs)
+
+  @staticmethod
+  def knows(lookup_string):
+    try:
+      name, _, _ = parse_name(lookup_string)
+    except ValueError as e:
+      raise ValueError(f"Error parsing:\n{lookup_string}") from e
+    return name in Registry.global_registry()
 
 
 @contextlib.contextmanager

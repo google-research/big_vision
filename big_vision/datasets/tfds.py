@@ -1,4 +1,4 @@
-# Copyright 2023 Big Vision Authors.
+# Copyright 2024 Big Vision Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -17,7 +17,9 @@ import functools
 
 import big_vision.datasets.core as ds_core
 import jax
+import numpy as np
 import overrides
+import tensorflow as tf
 import tensorflow_datasets as tfds
 
 
@@ -30,23 +32,15 @@ class DataSource(ds_core.DataSource):
     # Each host is responsible for a fixed subset of data
     process_splits = tfds.even_splits(split, jax.process_count())
     self.process_split = process_splits[jax.process_index()]
-    self.skip_decoders = {
-        f: tfds.decode.SkipDecoding()
-        for f in skip_decode
-        if f in self.builder.info.features
-    }
+    self.skip_decode = skip_decode
 
   @overrides.overrides
-  def get_tfdata(self, ordered=False, *, process_split=True):
-    return self.builder.as_dataset(
+  def get_tfdata(self, ordered=False, *, process_split=True, **kw):
+    return _get_dataset_from_builder(
+        self.builder, self.skip_decode,
         split=self.process_split if process_split else self.split,
         shuffle_files=not ordered,
-        read_config=tfds.ReadConfig(
-            skip_prefetch=True,  # We prefetch after pipeline.
-            try_autocache=False,  # We control this, esp. for few-shot.
-            add_tfds_id=True,
-        ),
-        decoders=self.skip_decoders)
+        **kw)
 
   @property
   @overrides.overrides
@@ -54,11 +48,44 @@ class DataSource(ds_core.DataSource):
     return self.builder.info.splits[self.split].num_examples
 
   @overrides.overrides
-  def num_examples_per_process(self, nprocess=None):
-    splits = tfds.even_splits(self.split, nprocess or jax.process_count())
+  def num_examples_per_process(self):
+    splits = tfds.even_splits(self.split, jax.process_count())
     return [self.builder.info.splits[s].num_examples for s in splits]
 
 
-@functools.lru_cache(maxsize=None)
+@functools.cache
 def _get_builder(dataset, data_dir):
-  return tfds.builder(dataset, data_dir=data_dir, try_gcs=True)
+  if dataset == "from_data_dir":
+    return tfds.builder_from_directory(data_dir)
+  else:
+    return tfds.builder(dataset, data_dir=data_dir, try_gcs=True)
+
+
+# Cache as it may well take 1-2min on large datasets, and we may use the same
+# multiple times (eg various evaluators).
+@functools.cache
+def _get_dataset_from_builder(builder, skip_decode, **kw):
+  """Returns a tf.data to be used."""
+  rckw = {k: kw.pop(k) for k in ("shuffle_seed",) if k in kw}
+  ds = builder.as_dataset(
+      read_config=tfds.ReadConfig(
+          skip_prefetch=True,  # We prefetch after pipeline.
+          try_autocache=False,  # We control this, esp. for few-shot.
+          add_tfds_id=True,
+          **rckw,
+      ),
+      decoders={
+          f: tfds.decode.SkipDecoding()
+          for f in skip_decode if f in builder.info.features
+      },
+      **kw)
+
+  def _hash_tfds_id(example):
+    id_ = tf.strings.to_hash_bucket_strong(
+        example["tfds_id"],
+        np.iinfo(np.uint32).max,  # Max value
+        [3714561454027272724, 8800639020734831960])  # Magic.
+    example["_id"] = tf.bitcast(id_, tf.int32)[0]  # good device dtype.
+    return example
+
+  return ds.map(_hash_tfds_id)

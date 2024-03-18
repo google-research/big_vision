@@ -1,4 +1,4 @@
-# Copyright 2023 Big Vision Authors.
+# Copyright 2024 Big Vision Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -109,6 +109,7 @@ def prepare_datasets(
   def get_captions(idx, features):
     """Returns a dataset with unrolled "caption" for every example."""
     texts = get_feature_value(features, txt_name)
+    texts = tf.experimental.numpy.atleast_1d(texts)  # For single-text GT.
     texts_n = tf.shape(texts)[0]
     return tf.data.Dataset.from_tensor_slices({
         "id": tf.tile([idx + offset], [texts_n]),

@@ -1,4 +1,4 @@
-# Copyright 2023 Big Vision Authors.
+# Copyright 2024 Big Vision Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -17,11 +17,17 @@
 import dataclasses
 import functools
 import importlib
+import json
+import os
 from typing import Any, Callable
 
+from absl import flags
+import big_vision.utils as u
 import flax
 import jax
 import numpy as np
+
+from tensorflow.io import gfile
 
 
 def from_config(config, predict_fns,
@@ -103,27 +109,67 @@ class _CacheablePartial:
     return functools.partial(self.fn, **self.kwargs)(*args, **kwargs)
 
 
-@functools.partial(jax.pmap, axis_name="batch")
-def all_gather(x):
-  """Gathers variables across all replicas."""
-  return jax.lax.all_gather(x, axis_name="batch")
+def process_sum(tree):
+  """Sums the pytree across all processes."""
+  if jax.process_count() == 1:  # Avoids corner-cases on donuts.
+    return tree
+
+  with jax.transfer_guard_device_to_host("allow"):
+    gathered = jax.experimental.multihost_utils.process_allgather(tree)
+  return jax.tree_map(functools.partial(np.sum, axis=0), gathered)
 
 
-@functools.partial(jax.pmap, axis_name="procs")
-def psum(x):
-  """Sums variables across all replicas."""
-  return jax.lax.psum(x, axis_name="procs")
+def resolve_outfile(outfile, split="", **kw):
+  if not outfile:
+    return None
+
+  # A caveat: when workdir doesn't exist but is in the `outfile`, we should
+  # skip. This is common in small runs or runlocal debuggings.
+  if "{workdir}" in outfile and not flags.FLAGS.workdir:
+    return None
+
+  return outfile.format(
+      workdir=flags.FLAGS.workdir,
+      xid=flags.FLAGS.xm_xid,
+      wid=flags.FLAGS.xm_wid,
+      split="".join(c if c not in "[]%:" else "_" for c in split),
+      step=getattr(u.chrono, "prev_step", None),
+      **kw,
+  )
 
 
-def global_sum(things):
-  """Sums things that are on the host, across all hosts."""
-  if jax.process_count() == 1:  # Avoids polluting donut's memory.
-    return things
+def multiprocess_write_json(outfile, jobj):  # jobj = "json object"
+  """Write a single json file combining all processes' `jobj`s."""
+  if not outfile:
+    return
 
-  # Put the thing on the first device, and zeros on all other (local) devices.
-  ndev = jax.local_device_count()
-  padrep = lambda x: np.array([x] + [np.zeros_like(x)] * (ndev - 1))
+  outfile = resolve_outfile(outfile)
+  gfile.makedirs(os.path.dirname(outfile))
 
-  summed_things = psum(jax.tree_map(padrep, things))
-  # Now each device holds the global sum, just grab it from the first one.
-  return jax.tree_map(lambda x: np.array(x[0]), summed_things)
+  if isinstance(jobj, list):
+    combine_fn = list.extend
+  elif isinstance(jobj, dict):
+    combine_fn = dict.update
+  else:
+    raise TypeError(f"Can only write list or dict jsons, but got {type(jobj)}")
+
+  # First, each process writes its own file.
+  with gfile.GFile(outfile + f".p{jax.process_index()}", "w+") as f:
+    f.write(json.dumps(jobj))
+
+  u.sync()  # Wait for all files to be written; `with` above does close/flush.
+
+  # Have process 0 collect, concat, and write final output.
+  all_json = type(jobj)()
+  if jax.process_index() == 0:
+    for pid in range(jax.process_count()):
+      with gfile.GFile(outfile + f".p{pid}", "r") as f:
+        combine_fn(all_json, json.loads(f.read()))
+    with gfile.GFile(outfile, "w+") as f:
+      f.write(json.dumps(all_json))
+
+  # Cleanup time
+  u.sync()
+  gfile.Remove(outfile + f".p{jax.process_index()}")
+
+  return all_json

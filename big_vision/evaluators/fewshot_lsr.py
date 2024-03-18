@@ -1,4 +1,4 @@
-# Copyright 2023 Big Vision Authors.
+# Copyright 2024 Big Vision Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -115,9 +115,9 @@ class Evaluator:
   """Class for few-shot evaluation."""
 
   def __init__(self, predict_fn, batch_size,
-               representation_layer, datasets, shots, l2_reg,
+               datasets, shots, l2_reg,
                pp_train, pp_eval, display_first,
-               num_seeds=3,
+               representation_layer=None, num_seeds=3,
                label_key="label", mask_key="_mask", *,
                devices):
     self.datasets = datasets
@@ -142,8 +142,11 @@ class Evaluator:
     # `out_shardings=Sharding(self.mesh, P())` will "all_gather" the outputs.
     @functools.partial(jax.jit, out_shardings=Sharding(self.mesh, P()))
     def _repr_fn(train_state, batch, labels, mask):
-      *_, out = predict_fn(train_state, batch)
-      rep = u.tree_get(out, representation_layer)
+      zimg, *_, out = predict_fn(train_state, batch)
+      if representation_layer is not None:
+        rep = u.tree_get(out, representation_layer)
+      else:
+        rep = zimg
       return rep, labels, mask
     return _repr_fn
 

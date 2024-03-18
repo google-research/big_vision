@@ -1,4 +1,4 @@
-# Copyright 2023 Big Vision Authors.
+# Copyright 2024 Big Vision Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -14,7 +14,7 @@
 
 # pytype: disable=not-writable,attribute-error
 # pylint: disable=line-too-long,missing-function-docstring
-r"""A config to load and evaluate models.
+r"""A config to load and eval key model using the core train.py.
 
 The runtime varies widely depending on the model, but each one should reproduce
 the corresponding paper's numbers.
@@ -23,20 +23,19 @@ to run, so a few examples are given below:
 
 Run and evaluate a BiT-M ResNet-50x1 model that was transferred to i1k:
 
-big_vision.tools.eval_only \
+big_vision.train \
     --config big_vision/configs/load_and_eval.py:name=bit_paper,batch_size=8 \
     --config.model_init M-imagenet2012 --config.model.width 1 --config.model.depth 50
 
 Run and evaluate the recommended ViT-B/32 from "how to train your vit" paper:
 
-big_vision.tools.eval_only \
+big_vision.train \
     --config big_vision/configs/load_and_eval.py:name=vit_i21k,batch_size=8 \
     --config.model.variant B/32 --config.model_init howto-i21k-B/32
 """
 
 import big_vision.configs.common as bvcc
 from big_vision.configs.common_fewshot import get_fewshot_lsr
-# from big_vision.configs.proj.image_text import lit_eval
 
 
 def eval_only(config, batch_size, spec_for_init):
@@ -47,16 +46,23 @@ def eval_only(config, batch_size, spec_for_init):
   config.input.data = dict(name='bv:dummy', spec=spec_for_init)
   config.optax_name = 'identity'
   config.lr = 0.0
+
+  config.mesh = [('data', -1)]
+  config.sharding_strategy = [('params/.*', 'fsdp(axis="data")')]
+  config.sharding_rules = [('act_batch', ('data',))]
+
   return config
 
 
-def get_config(arg='name=bit_paper,batch_size=2'):
-  config = bvcc.parse_arg(arg, name='', batch_size=2)
+def get_config(arg=''):
+  config = bvcc.parse_arg(arg, name='bit_paper', batch_size=4)
 
   # Make the config eval-only by setting some dummies.
   eval_only(config, config.batch_size, spec_for_init=dict(
       image=dict(shape=(224, 224, 3), dtype='float32'),
   ))
+
+  config.evals = dict(fewshot=get_fewshot_lsr())
 
   # Just calls the function with the name given as `config`.
   # Could also be a giant if-block if you're into that kind of thing.
@@ -70,9 +76,6 @@ def bit_paper(config):
   config.model_name = 'bit_paper'
   config.model_init = 'M-imagenet2012'  # M = i21k, -imagenet2012 = fine-tuned
   config.model = dict(width=1, depth=50)
-
-  config.evals = {}
-  config.evals.fewshot = get_fewshot_lsr()
 
   def get_eval(split, lbl, dataset='imagenet2012_real'):
     return dict(
@@ -99,8 +102,6 @@ def vit_i1k(config):
   config.model = dict(variant='S/16', pool_type='gap', posemb='sincos2d',
                       rep_size=True)
 
-  config.evals = {}
-  config.evals.fewshot = get_fewshot_lsr()
   config.evals.val = dict(
       type='classification',
       data=dict(name='imagenet2012', split='validation'),
@@ -117,8 +118,6 @@ def mlp_mixer_i1k(config):
   config.model_init = ''  # Will be set in sweep.
   config.model = dict(variant='L/16')
 
-  config.evals = {}
-  config.evals.fewshot = get_fewshot_lsr()
   config.evals.val = dict(
       type='classification',
       data=dict(name='imagenet2012', split='validation'),
@@ -135,8 +134,6 @@ def vit_i21k(config):
   config.model_init = ''  # Will be set in sweep.
   config.model = dict(variant='B/32', pool_type='tok')
 
-  config.evals = {}
-  config.evals.fewshot = get_fewshot_lsr()
   config.evals.val = dict(
       type='classification',
       data=dict(name='imagenet21k', split='full[:51200]'),

@@ -1,4 +1,4 @@
-# Copyright 2023 Big Vision Authors.
+# Copyright 2024 Big Vision Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -288,7 +288,9 @@ class CheckpointTest(tf.test.TestCase):
     y = utils.put_cpu(np.array([5, 6, 7, 8]))
     ckpt = {'x': x, 'y': {'z': y}}
 
-    sharding = jax.sharding.SingleDeviceSharding(jax.devices('cpu')[0])
+    sharding = jax.sharding.SingleDeviceSharding(
+        jax.local_devices(backend='cpu')[0]
+    )
     shardings = jax.tree_map(lambda _: sharding, ckpt)
 
     return gacm, save_path, ckpt, shardings

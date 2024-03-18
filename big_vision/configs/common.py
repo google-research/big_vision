@@ -1,4 +1,4 @@
-# Copyright 2023 Big Vision Authors.
+# Copyright 2024 Big Vision Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -68,8 +68,7 @@ def parse_arg(arg, lazy=False, **spec):
   """
   # Normalize arg and spec layout.
   arg = arg or ''  # Normalize None to empty string
-  spec = {k: (v if isinstance(v, tuple) else (v, get_type(v)))
-          for k, v in spec.items()}
+  spec = {k: get_type_with_default(v) for k, v in spec.items()}
 
   result = mlc.ConfigDict(type_safe=False)  # For convenient dot-access only.
 
@@ -104,14 +103,23 @@ def parse_arg(arg, lazy=False, **spec):
   return result
 
 
-def get_type(v):
-  """Returns type of v and for boolean returns a strict bool function."""
+def get_type_with_default(v):
+  """Returns (v, string_to_v_type) with lenient bool parsing."""
+  # For bool, do safe string conversion.
   if isinstance(v, bool):
     def strict_bool(x):
       assert x.lower() in {'true', 'false', ''}
       return x.lower() == 'true'
-    return strict_bool
-  return type(v)
+    return (v, strict_bool)
+  # If already a (default, type) tuple, use that.
+  if isinstance(v, (tuple, list)):
+    assert len(v) == 2 and isinstance(v[1], type), (
+        'List or tuple types are currently not supported because we use `,` as'
+        ' dumb delimiter. Contributions (probably using ast) welcome. You can'
+        ' unblock by using a string with eval(s.replace(";", ",")) or similar')
+    return (v[0], v[1])
+  # Otherwise, derive the type from the default value.
+  return (v, type(v))
 
 
 def autotype(x):
