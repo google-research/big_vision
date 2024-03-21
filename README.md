@@ -64,6 +64,9 @@ codebase:
   Mostafa Dehghani*, Josip Djolonga*, Basil Mustafa*, Piotr Padlewski*, Jonathan Heek*, *wow many middle authors*, Neil Houlsby*.
 - (partial) [Finite Scalar Quantization: VQ-VAE Made Simple](https://arxiv.org/abs/2309.15505), by
   Fabian Mentzer, David Minnen, Eirikur Agustsson, Michael Tschannen.
+- [GIVT: Generative Infinite-Vocabulary Transformers](https://arxiv.org/abs/2312.02116), by
+  Michael Tschannen, Cian Eastwood, Fabian Mentzer\
+  Resources: [readme](big_vision/configs/proj/givt/README.md), [config](big_vision/configs/proj/givt/givt_imagenet2012.py), [colab](https://colab.research.google.com/github/google-research/big_vision/blob/main/big_vision/configs/proj/givt/givt_demo_colab.ipynb).
 
 ### Multimodal research
 
@@ -454,6 +457,7 @@ core code and configs are expected to work at head.
 | GSAM       | WIP                                                                                           |
 | CLIPPO     | https://github.com/google-research/big_vision/commit/fd2d3bd2efc9d89ea959f16cd2f58ae8a495cd44 |
 | CapPa      | https://github.com/google-research/big_vision/commit/7ace659452dee4b68547575352c022a2eef587a5 |
+| GIVT       | https://github.com/google-research/big_vision/commit/fa073114ffbbfbfb52777d2a95c31174c26452cc |
 
 # Citing the codebase
 
