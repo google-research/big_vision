@@ -457,7 +457,7 @@ core code and configs are expected to work at head.
 | GSAM       | WIP                                                                                           |
 | CLIPPO     | https://github.com/google-research/big_vision/commit/fd2d3bd2efc9d89ea959f16cd2f58ae8a495cd44 |
 | CapPa      | https://github.com/google-research/big_vision/commit/7ace659452dee4b68547575352c022a2eef587a5 |
-| GIVT       | https://github.com/google-research/big_vision/commit/fa073114ffbbfbfb52777d2a95c31174c26452cc |
+| GIVT       | https://github.com/google-research/big_vision/commit/0cb70881dd33b3343b769347dc19793c4994b8cb |
 
 # Citing the codebase
 

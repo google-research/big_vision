@@ -67,9 +67,9 @@ For training the ImageNet 2012 VAE models we used a modified version of the [Mas
 
 The `big_vision` input pipeline relies on [TensorFlow Datasets (TFDS)](https://www.tensorflow.org/datasets) 
 which supports some data sets out-of-the-box, whereas others require manual download of the data
-(for example ImageNet and COCO (2017), see the `big_vision` [main README](../../..#cloud-tpu-vm-setup) and the [UViM README](../../../configs/proj/uvim), respectively, for details).
+(for example ImageNet and COCO (2017), see the `big_vision` [main README](../../../../#cloud-tpu-vm-setup) and the [UViM README](../uvim), respectively, for details).
 
-After setting up `big_vision` as described in the [main README](../../..#cloud-tpu-vm-setup), training can be launched locally as follows
+After setting up `big_vision` as described in the [main README](../../../../#cloud-tpu-vm-setup), training can be launched locally as follows
 
 ```
 python -m big_vision.trainers.proj.givt.generative \
@@ -91,7 +91,7 @@ python -m big_vision.trainers.proj.givt.vae \
   --workdir gs://$GS_BUCKET_NAME/big_vision/`date '+%m-%d_%H%M'`
 ```
 
-Please refer to the [main README](../../..#cloud-tpu-vm-setup)
+Please refer to the [main README](../../../../#cloud-tpu-vm-setup)
 for details on how to launch training on a (multi-host) TPU setup.
 
 
