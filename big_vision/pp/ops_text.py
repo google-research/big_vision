@@ -159,7 +159,8 @@ def get_pp_tokenize(
 
   def _pp_tokenize(txt):
     if sample_if_multi:
-      txt = ops_general.get_choice(key="t")({"t": txt or [""]})["t"]
+      txt = ops_general.get_choice(key="t")(
+              ops_general.get_setdefault("t", "")({"t": txt}))["t"]
 
     if lower:
       txt = tf.strings.lower(txt) if sample_if_multi else tf.map_fn(
