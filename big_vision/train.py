@@ -73,7 +73,9 @@ P = jax.sharding.PartitionSpec
 def main(argv):
   del argv
 
-  jax.distributed.initialize()
+  # This is needed on multihost systems, but crashes on non-TPU single-host.
+  if os.environ.get("BV_JAX_INIT"):
+    jax.distributed.initialize()
 
   # Make sure TF does not touch GPUs.
   tf.config.set_visible_devices([], "GPU")
@@ -191,7 +193,7 @@ def main(argv):
       num_classes=config.num_classes, **config.get("model", {}))
 
   def init(rng):
-    batch = jax.tree_map(lambda x: jnp.zeros(x.shape, x.dtype.as_numpy_dtype),
+    batch = jax.tree.map(lambda x: jnp.zeros(x.shape, x.dtype.as_numpy_dtype),
                          train_ds.element_spec)
     params = model.init(rng, batch["image"])["params"]
 
@@ -220,7 +222,7 @@ def main(argv):
   sched_fns_cpu = [u.jit_cpu()(sched_fn) for sched_fn in sched_fns]
 
   if jax.process_index() == 0:
-    num_params = sum(np.prod(p.shape) for p in jax.tree_leaves(params_shape))
+    num_params = sum(np.prod(p.shape) for p in jax.tree.leaves(params_shape))
     mw.measure("num_params", num_params)
 
 ################################################################################
@@ -307,11 +309,11 @@ def main(argv):
     params = optax.apply_updates(params, updates)
 
     measurements = {"training_loss": loss}
-    gs = jax.tree_leaves(bv_optax.replace_frozen(config.schedule, grads, 0.))
+    gs = jax.tree.leaves(bv_optax.replace_frozen(config.schedule, grads, 0.))
     measurements["l2_grads"] = jnp.sqrt(sum([jnp.sum(g * g) for g in gs]))
-    ps = jax.tree_leaves(params)
+    ps = jax.tree.leaves(params)
     measurements["l2_params"] = jnp.sqrt(sum([jnp.sum(p * p) for p in ps]))
-    us = jax.tree_leaves(updates)
+    us = jax.tree.leaves(updates)
     measurements["l2_updates"] = jnp.sqrt(sum([jnp.sum(u * u) for u in us]))
 
     return {"params": params, "opt": opt}, measurements
@@ -339,11 +341,11 @@ def main(argv):
 
   if resume_ckpt_path:
     write_note(f"Resuming training from checkpoint {resume_ckpt_path}...")
-    jax.tree_map(lambda x: x.delete(), train_state)
+    jax.tree.map(lambda x: x.delete(), train_state)
     del train_state
     shardings = {
         **train_state_sharding,
-        "chrono": jax.tree_map(lambda _: repl_sharding,
+        "chrono": jax.tree.map(lambda _: repl_sharding,
                                u.chrono.save()),
     }
     loaded = u.load_checkpoint_ts(
@@ -476,7 +478,7 @@ def main(argv):
       # broadcast the state to all hosts and convert it to a global array.
       with jax.transfer_guard("allow"):
         chrono_ckpt = multihost_utils.broadcast_one_to_all(u.chrono.save())
-      chrono_shardings = jax.tree_map(lambda _: repl_sharding, chrono_ckpt)
+      chrono_shardings = jax.tree.map(lambda _: repl_sharding, chrono_ckpt)
       ckpt = ckpt | {"chrono": u.reshard(chrono_ckpt, chrono_shardings)}
 
       u.save_checkpoint_ts(ckpt_mngr, ckpt, save_ckpt_path, step, keep)
@@ -505,7 +507,6 @@ def main(argv):
   pool.close()
   pool.join()
   mw.close()
-
   if ckpt_mngr:
     ckpt_mngr.wait_until_finished()
 

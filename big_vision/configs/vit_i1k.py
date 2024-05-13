@@ -89,7 +89,7 @@ def get_config(arg=None):
       split='train[:99%]',
   )
   config.input.batch_size = 4096
-  config.input.cache_raw = not arg.runlocal  # Needs up to 120GB of RAM!
+  config.input.cache = 'raw_data' if arg.runlocal else 'none'  # Needs up to 120GB of RAM!
   config.input.shuffle_buffer_size = 250_000
 
   pp_common = (
@@ -150,7 +150,7 @@ def get_config(arg=None):
         pp_fn=pp_eval.format(lbl='label'),
         loss_name=config.loss,
         log_steps=2500,  # Very fast O(seconds) so it's fine to run it often.
-        cache_final=not arg.runlocal,
+        cache='final' if arg.runlocal else 'none',
     )
   config.evals = {}
   config.evals.train = get_eval('train[:2%]')

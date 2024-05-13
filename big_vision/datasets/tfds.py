@@ -35,8 +35,12 @@ class DataSource(ds_core.DataSource):
     self.skip_decode = skip_decode
 
   @overrides.overrides
-  def get_tfdata(self, ordered=False, *, process_split=True, **kw):
-    return _get_dataset_from_builder(
+  def get_tfdata(
+      self, ordered=False, *, process_split=True, allow_cache=True, **kw):
+    # The tf.data may use a lot of RAM, so we need to expose the option of not
+    # keeping this in memory when we use lots of input pipelines, such as when
+    # having many ephemeral evaluators.
+    return (_cached_get_dataset if allow_cache else _get_dataset)(
         self.builder, self.skip_decode,
         split=self.process_split if process_split else self.split,
         shuffle_files=not ordered,
@@ -63,8 +67,7 @@ def _get_builder(dataset, data_dir):
 
 # Cache as it may well take 1-2min on large datasets, and we may use the same
 # multiple times (eg various evaluators).
-@functools.cache
-def _get_dataset_from_builder(builder, skip_decode, **kw):
+def _get_dataset(builder, skip_decode, **kw):
   """Returns a tf.data to be used."""
   rckw = {k: kw.pop(k) for k in ("shuffle_seed",) if k in kw}
   ds = builder.as_dataset(
@@ -89,3 +92,4 @@ def _get_dataset_from_builder(builder, skip_decode, **kw):
     return example
 
   return ds.map(_hash_tfds_id)
+_cached_get_dataset = functools.cache(_get_dataset)

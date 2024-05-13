@@ -55,20 +55,20 @@ def infer_sharding(params, strategy, mesh):
   # early patterns get matching priority.
   mask_trees = u.make_mask_trees(params, patterns)
 
-  specs = jax.tree_map(lambda x: (None,) * x.ndim, params)
+  specs = jax.tree.map(lambda x: (None,) * x.ndim, params)
 
   for mask_tree, tactic in zip(mask_trees, tactics):
     for op_str in tactic.split("|"):
       op = Registry.lookup(f"shardings.{op_str}")()
-      specs = jax.tree_map(
+      specs = jax.tree.map(
           lambda x, n, match, spec, op=op: op(spec, mesh, n, x)
           if match else spec,
           params, names, mask_tree, specs,
           is_leaf=lambda v: isinstance(v, nn.Partitioned))
 
   # Two-level tree_map to prevent it from doing traversal inside the spec.
-  specs = jax.tree_map(lambda _, spec: P(*spec), nn.unbox(params), specs)
-  return jax.tree_map(lambda spec: NamedSharding(mesh, spec), specs)
+  specs = jax.tree.map(lambda _, spec: P(*spec), nn.unbox(params), specs)
+  return jax.tree.map(lambda spec: NamedSharding(mesh, spec), specs)
 
 
 # Sharding rules

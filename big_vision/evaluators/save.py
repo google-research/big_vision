@@ -101,7 +101,7 @@ class Evaluator:
 
       out = jax.device_get(out)
       mask = out['inputs']['_mask']
-      out = jax.tree_map(lambda x: x[mask == 1], out)  # pylint: disable=cell-var-from-loop
+      out = jax.tree.map(lambda x: x[mask == 1], out)  # pylint: disable=cell-var-from-loop
       count += mask.shape[0]
       out['inputs'].pop('_mask')
       outputs.append(out)
@@ -114,7 +114,7 @@ class Evaluator:
       return
 
     logging.info('Saving %d examples in %s', count, outfile)
-    outputs = jax.tree_map(lambda *x: np.concatenate(x, axis=0), *outputs)
+    outputs = jax.tree.map(lambda *x: np.concatenate(x, axis=0), *outputs)
     utils.save_checkpoint(outputs, outfile, compressed=True)
     return
 

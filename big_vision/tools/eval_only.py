@@ -89,7 +89,7 @@ def main(argv):
     params_cpu = init(jax.random.PRNGKey(42))
   if jax.process_index() == 0:
     parameter_overview.log_parameter_overview(params_cpu, msg="init params")
-    num_params = sum(p.size for p in jax.tree_leaves(params_cpu))
+    num_params = sum(p.size for p in jax.tree.leaves(params_cpu))
     mw.measure("num_params", num_params)
 
   # The use-case for not loading an init is testing and debugging.

@@ -143,7 +143,7 @@ class Encoder(nn.Module):
               num_heads=self.num_heads,
               dropout=self.dropout)(x, deterministic)
       for lyr in range(self.depth):
-        out[f"block{lyr:02d}"] = jax.tree_map(lambda o, l=lyr: o[l], scan_out)
+        out[f"block{lyr:02d}"] = jax.tree.map(lambda o, l=lyr: o[l], scan_out)
     else:
       # Input Encoder
       for lyr in range(self.depth):
@@ -364,7 +364,7 @@ def pyloop_to_scan(params_pyloop):
   # array pytrees for each encoderblock, while the scan one has just one
   # encoderblock pytree, with all block's params concatenated.
 
-  params_scan = jax.tree_map(lambda x: x, params_pyloop)  # Structural copy
+  params_scan = jax.tree.map(lambda x: x, params_pyloop)  # Structural copy
   t = params_scan["Transformer"]
 
   # Find highest index of encoderblocks in the checkpoint (they start at 0):
@@ -375,7 +375,7 @@ def pyloop_to_scan(params_pyloop):
     return np.stack(values)
 
   # Stack all encoderblocks into a single one:
-  t["encoderblock"] = jax.tree_map(
+  t["encoderblock"] = jax.tree.map(
       stack, *[t[f"encoderblock_{lyr}"] for lyr in range(depth)])
 
   for lyr in range(depth):
@@ -388,7 +388,7 @@ def scan_to_pyloop(params_scan):
   """Converts a lax.scan ViT checkpoint to a python for-loop based one."""
   # See comment in pyloop_to_scan.
 
-  params_scan = jax.tree_map(lambda x: x, params_scan)  # Structural copy
+  params_scan = jax.tree.map(lambda x: x, params_scan)  # Structural copy
   t = params_scan["Transformer"]
 
   # Find out how many encoderblocks there are
@@ -396,7 +396,7 @@ def scan_to_pyloop(params_scan):
 
   # Create that many encoderblocks, each with their slice of their sub-pytree.
   for lyr in range(depth):
-    block = jax.tree_map(lambda x, lyr=lyr: x[lyr], t["encoderblock"])
+    block = jax.tree.map(lambda x, lyr=lyr: x[lyr], t["encoderblock"])
     t[f"encoderblock_{lyr}"] = block
 
   del t["encoderblock"]

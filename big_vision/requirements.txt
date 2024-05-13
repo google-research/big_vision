@@ -2,6 +2,7 @@ numpy>=1.26
 absl-py
 git+https://github.com/google/CommonLoopUtils
 distrax
+editdistance
 einops
 flax
 optax
@@ -14,3 +15,4 @@ tensorflow-cpu
 tfds-nightly
 tensorflow-text
 tensorflow-gan
+pycocoevalcap
