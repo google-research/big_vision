@@ -169,7 +169,7 @@ def get_copy(inkey, outkey):
     # game. What we want, is to only copy the python structure (dicts, lists)
     # and keep tensors as they are, since we never modify them in-place anyways.
     # The following achieves exactly that.
-    data[outkey] = jax.tree_map(lambda x: x, data[inkey])
+    data[outkey] = jax.tree.map(lambda x: x, data[inkey])
     return data
 
   return _copy
@@ -268,9 +268,9 @@ def get_reshape(new_shape):
 
 @Registry.register("preprocess_ops.setdefault")
 def get_setdefault(key, value):
-  """If `key` is an empty tensor, set it to `value`."""
+  """If `key` is an empty tensor or missing, set it to `value`."""
   def _setdefault(data):
-    x = data[key]
+    x = data.get(key, tf.constant(value))
     v = tf.constant(value, dtype=x.dtype)
     v = tf.broadcast_to(v, [s or 1 for s in x.shape])
     data[key] = tf.cond(tf.size(x) > 0, lambda: x, lambda: v)

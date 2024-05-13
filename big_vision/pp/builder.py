@@ -36,8 +36,8 @@ def get_preprocess_fn(pp_pipeline, log_data=True):
   Args:
     pp_pipeline: A string describing the pre-processing pipeline. If empty or
       None, no preprocessing will be executed.
-    log_data: Whether to log the data before and after preprocessing. Note:
-      Remember set to `False` in eager mode to avoid too many log messages.
+    log_data: Whether to log the data before and after preprocessing. Can also
+      be a string to show in the log for debugging, for example dataset name.
 
   Returns:
     preprocessing function.
@@ -61,7 +61,7 @@ def get_preprocess_fn(pp_pipeline, log_data=True):
 
     # Apply all the individual steps in sequence.
     if log_data:
-      logging.info("Data before pre-processing:\n%s", data)
+      logging.info("Data before pre-processing (%s):\n%s", log_data, data)
     for op in ops:
       data = op(data)
 
@@ -71,7 +71,7 @@ def get_preprocess_fn(pp_pipeline, log_data=True):
                        "not %s" % str(type(data)))
 
     if log_data:
-      logging.info("Data after pre-processing:\n%s", data)
+      logging.info("Data after pre-processing (%s):\n%s", log_data, data)
     log_data = False  # For eager&pygrain: only log first one of each pipeline.
     return data
 

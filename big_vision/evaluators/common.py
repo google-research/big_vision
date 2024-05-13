@@ -22,6 +22,9 @@ import os
 from typing import Any, Callable
 
 from absl import flags
+from big_vision import input_pipeline
+from big_vision.datasets import core as ds_core
+from big_vision.pp import builder as pp_builder
 import big_vision.utils as u
 import flax
 import jax
@@ -109,6 +112,58 @@ class _CacheablePartial:
     return functools.partial(self.fn, **self.kwargs)(*args, **kwargs)
 
 
+def eval_input_pipeline(
+    data, pp_fn, batch_size, devices, keep_on_cpu=(),
+    cache="pipeline", prefetch=1, warmup=False,
+):
+  """Create an input pipeline in the way used by most evaluators.
+
+  Args:
+    data: The configuration to create the data source (like for training).
+    pp_fn: A string representing the preprocessing to be performed.
+    batch_size: The batch size to use.
+    devices: The devices that the batches are sharded and pre-fetched onto.
+    keep_on_cpu: See input_pipeline.start_global. Entries in the batch that
+      should be kept on the CPU, hence could be ragged or of string type.
+    cache: One of "none", "pipeline", "raw_data", "final_data". Determines what
+      part of the input stream should be cached across evaluator runs. They use
+      more and more RAM, but make evals faster, in that order.
+      - "none": Entirely re-create and destroy the input pipeline each run.
+      - "pipeline": Keep the (tf.data) pipeline object alive across runs.
+      - "raw_data": Cache the full raw data before pre-processing.
+      - "final_data": Cache the full raw data after pre-processing.
+    prefetch: How many batches to fetch ahead.
+    warmup: Start fetching the first batch at creation time (right now),
+      instead of once the iteration starts.
+
+  Returns:
+    A tuple (get_iter, steps), the first element is a function that returns
+    the iterator to be used for an evaluation, the second one is how many steps
+    should be iterated for doing one evaluation.
+  """
+  assert (
+      cache is None
+      or cache.lower() in ("none", "pipeline", "raw_data", "final_data")
+  ), f"Unknown value for cache: {cache}"
+  data_source = ds_core.get(**data)
+  tfdata, steps = input_pipeline.make_for_inference(
+      data_source.get_tfdata(ordered=True, allow_cache=cache.lower() != "none"),
+      batch_size=batch_size,
+      num_ex_per_process=data_source.num_examples_per_process(),
+      preprocess_fn=pp_builder.get_preprocess_fn(pp_fn, str(data)),
+      cache_final=cache == "raw_data",
+      cache_raw=cache == "final_data")
+  get_data_iter = lambda: input_pipeline.start_global(
+      tfdata, devices, prefetch, keep_on_cpu, warmup)
+
+  # Possibly create one persistent iterator:
+  if cache in ("pipeline", "raw_data", "final_data"):
+    data_iter = get_data_iter()
+    get_data_iter = lambda: data_iter
+
+  return get_data_iter, steps
+
+
 def process_sum(tree):
   """Sums the pytree across all processes."""
   if jax.process_count() == 1:  # Avoids corner-cases on donuts.
@@ -116,7 +171,7 @@ def process_sum(tree):
 
   with jax.transfer_guard_device_to_host("allow"):
     gathered = jax.experimental.multihost_utils.process_allgather(tree)
-  return jax.tree_map(functools.partial(np.sum, axis=0), gathered)
+  return jax.tree.map(functools.partial(np.sum, axis=0), gathered)
 
 
 def resolve_outfile(outfile, split="", **kw):
@@ -130,8 +185,6 @@ def resolve_outfile(outfile, split="", **kw):
 
   return outfile.format(
       workdir=flags.FLAGS.workdir,
-      xid=flags.FLAGS.xm_xid,
-      wid=flags.FLAGS.xm_wid,
       split="".join(c if c not in "[]%:" else "_" for c in split),
       step=getattr(u.chrono, "prev_step", None),
       **kw,
@@ -170,6 +223,6 @@ def multiprocess_write_json(outfile, jobj):  # jobj = "json object"
 
   # Cleanup time
   u.sync()
-  gfile.Remove(outfile + f".p{jax.process_index()}")
+  gfile.remove(outfile + f".p{jax.process_index()}")
 
   return all_json

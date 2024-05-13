@@ -28,7 +28,7 @@ import optax
 class OptaxTest(parameterized.TestCase):
 
   def test_get_count(self):
-    params = jax.tree_map(jnp.array, {"a": 1.})
+    params = jax.tree.map(jnp.array, {"a": 1.})
     tx = optax.masked(
         optax.scale_by_schedule(lambda step: step),
         {"a": True},
@@ -39,7 +39,7 @@ class OptaxTest(parameterized.TestCase):
     self.assertEqual(bv_optax.get_count(opt_state), 1)
 
   def test_split_frozen(self):
-    params = jax.tree_map(jnp.array, {
+    params = jax.tree.map(jnp.array, {
         "Dense_0": {"kernel": 1., "bias": 2.},
     })  # pyformat: disable
     sched1 = dict(decay_type="cosine")
@@ -88,7 +88,7 @@ class OptaxTest(parameterized.TestCase):
       _ = bv_optax._split_frozen(masks, scheds)
 
   def test_replace_frozen(self):
-    params = jax.tree_map(jnp.array, {
+    params = jax.tree.map(jnp.array, {
         "Dense_0": {"kernel": 1., "bias": 2.},
     })  # pyformat: disable
     schedule = [
@@ -101,7 +101,7 @@ class OptaxTest(parameterized.TestCase):
     )  # pyformat: disable
 
   def test_make_simple(self):
-    params = jax.tree_map(jnp.array, {
+    params = jax.tree.map(jnp.array, {
         "Dense_0": {"kernel": 1., "bias": 2.},
     })  # pyformat: disable
 
@@ -117,7 +117,7 @@ class OptaxTest(parameterized.TestCase):
     sched_kw = dict(global_batch_size=1, total_steps=total_steps)
     tx, (schedule_fn,) = bv_optax.make(config, params, sched_kw=sched_kw)
     opt_state = tx.init(params)
-    grads = jax.tree_map(jnp.ones_like, params)
+    grads = jax.tree.map(jnp.ones_like, params)
     for step in range(total_steps):
       updates, opt_state = tx.update(grads, opt_state)
       self.assertEqual(bv_optax.get_count(opt_state), step + 1)
@@ -125,13 +125,13 @@ class OptaxTest(parameterized.TestCase):
       np.testing.assert_almost_equal(
           sched, 1.0 / total_steps * (total_steps - step))
       make_tx = lambda sched: lambda g: -sched * config.lr * g_scale * g
-      chex.assert_trees_all_close(updates, jax.tree_map(make_tx(sched), grads))
+      chex.assert_trees_all_close(updates, jax.tree.map(make_tx(sched), grads))
 
   def test_make_wd(self):
-    params = jax.tree_map(jnp.array, {
+    params = jax.tree.map(jnp.array, {
         "Dense_0": {"kernel": 1., "bias": 2., "other": 3.},
     })  # pyformat: disable
-    wds = jax.tree_map(jnp.array, {
+    wds = jax.tree.map(jnp.array, {
         "Dense_0": {"kernel": 2e-3, "bias": 5e-4, "other": 0.},
     })  # pyformat: disable
 
@@ -152,7 +152,7 @@ class OptaxTest(parameterized.TestCase):
     sched_kw = dict(global_batch_size=1, total_steps=total_steps)
     tx, (sched_fn,) = bv_optax.make(config, params, sched_kw=sched_kw)
     opt_state = tx.init(params)
-    grads = jax.tree_map(jnp.ones_like, params)
+    grads = jax.tree.map(jnp.ones_like, params)
     for step in range(total_steps):
       updates, opt_state = tx.update(grads, opt_state, params)
       self.assertEqual(bv_optax.get_count(opt_state), step + 1)
@@ -166,10 +166,10 @@ class OptaxTest(parameterized.TestCase):
         return inner
 
       chex.assert_trees_all_close(
-          updates, jax.tree_map(make_tx(sched), params, grads, wds))
+          updates, jax.tree.map(make_tx(sched), params, grads, wds))
 
   def test_make_clip_norm(self):
-    params = jax.tree_map(jnp.array, {
+    params = jax.tree.map(jnp.array, {
         "Dense_0": {"kernel": 1., "bias": 2., "other": 3.},
     })  # pyformat: disable
 
@@ -187,11 +187,11 @@ class OptaxTest(parameterized.TestCase):
     tx, (sched_fn,) = bv_optax.make(config, params, sched_kw=sched_kw)
     opt_state = tx.init(params)
 
-    grads = jax.tree_map(jnp.ones_like, params)
-    gflat = jax.tree_leaves(grads)
+    grads = jax.tree.map(jnp.ones_like, params)
+    gflat = jax.tree.leaves(grads)
     l2_g = jnp.sqrt(sum([jnp.vdot(p, p) for p in gflat]))
     grad_clip_factor = jnp.minimum(1.0, config.grad_clip_norm / l2_g)
-    grads_scaled = jax.tree_map(lambda p: grad_clip_factor * p, grads)
+    grads_scaled = jax.tree.map(lambda p: grad_clip_factor * p, grads)
 
     for step in range(total_steps):
       updates, opt_state = tx.update(grads, opt_state)
@@ -201,10 +201,10 @@ class OptaxTest(parameterized.TestCase):
           sched, 1.0 / total_steps * (total_steps - step))
       make_tx = lambda sched: lambda g: -sched * config.lr * g_scale * g
       chex.assert_trees_all_close(updates,
-                                  jax.tree_map(make_tx(sched), grads_scaled))
+                                  jax.tree.map(make_tx(sched), grads_scaled))
 
   def test_make_multi(self):
-    params = jax.tree_map(
+    params = jax.tree.map(
         jnp.array, {
             "Dense_0": {"kernel": 1.0, "bias": 2.0, "other": 3.0},
             "Dense_1": {"kernel": 4.0, "bias": 5.0, "other": 6.0},
@@ -225,7 +225,7 @@ class OptaxTest(parameterized.TestCase):
     wdb = 1e-3
     wd1 = 10.0
     wd2 = 0.1
-    wds = jax.tree_map(
+    wds = jax.tree.map(
         jnp.array, {
             "Dense_0": {"kernel": wd1 * wdb, "bias": wd2 * wdb, "other": 0.},
             "Dense_1": {"kernel": wd1 * wdb, "bias": wd2 * wdb, "other": 0.},
@@ -272,14 +272,14 @@ class OptaxTest(parameterized.TestCase):
         "Dense_3": {"kernel": frozen_fn, "bias": frozen_fn, "other": frozen_fn},
     }  # pyformat: disable
 
-    grads = jax.tree_map(jnp.ones_like, params)
-    gflat, _ = jax.tree_flatten(
+    grads = jax.tree.map(jnp.ones_like, params)
+    gflat, _ = jax.tree.flatten(
         # Don't count frozen params towards gradient norm.
-        jax.tree_map(lambda g, sched_fn: {frozen_fn: 0}.get(sched_fn, g),
+        jax.tree.map(lambda g, sched_fn: {frozen_fn: 0}.get(sched_fn, g),
                      grads, sched_fns))
     l2_g = jnp.sqrt(sum([jnp.vdot(p, p) for p in gflat]))
     grad_clip_factor = jnp.minimum(1.0, config.grad_clip_norm / l2_g)
-    grads_scaled = jax.tree_map(lambda p: grad_clip_factor * p, grads)
+    grads_scaled = jax.tree.map(lambda p: grad_clip_factor * p, grads)
 
     def make_tx(step):
       def get_update(p, g, wd, sched_fn, lr_mult):
@@ -295,7 +295,7 @@ class OptaxTest(parameterized.TestCase):
                                      mult2 * (total_steps - step) / total_steps)
       chex.assert_trees_all_close(
           updates,
-          jax.tree_map(
+          jax.tree.map(
               make_tx(step), params, grads_scaled, wds, sched_fns, lr_mults))
 
   def test_frozen_no_state(self):
@@ -314,7 +314,7 @@ class OptaxTest(parameterized.TestCase):
     opt_state = tx.init(params)
     adam_state = bv_optax.find_states(opt_state, optax.ScaleByAdamState)
     nbytes = sum(
-        jax.tree_flatten(jax.tree_map(lambda x: x.nbytes, adam_state))[0])
+        jax.tree.flatten(jax.tree.map(lambda x: x.nbytes, adam_state))[0])
     self.assertLess(nbytes, 1_000)
 
   def test_adafactor(self):
@@ -331,8 +331,8 @@ class OptaxTest(parameterized.TestCase):
     opt_state = tx.init(params)
     adafactor_state = bv_optax.find_states(opt_state, optax.FactoredState)
     n_state_params = sum(
-        jax.tree_flatten(
-            jax.tree_map(lambda x: np.prod(
+        jax.tree.flatten(
+            jax.tree.map(lambda x: np.prod(
                 x.shape if hasattr(x, "shape") else 0), adafactor_state))[0])
     self.assertEqual(n_state_params, 2 * 1024 + 2)
 

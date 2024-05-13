@@ -105,14 +105,14 @@ class TreeTest(tf.test.TestCase):
 
     self.d1 = {'w1': 1, 'w2': 2, 'w34': (3, 4)}
     self.d1_flat = [1, 2]
-    self.d1_flat_jax = jax.tree_flatten(self.d1)[0]
+    self.d1_flat_jax = jax.tree.flatten(self.d1)[0]
     self.d1_named_flat = [('w1', 1), ('w2', 2), ('w34/0', 3), ('w34/1', 4)]
     self.d1_named_flat_jax = [('w1', 1), ('w2', 2), ('w34/0', 3), ('w34/1', 4)]
 
     self.d2 = {'conv1': {'kernel': 0, 'bias': 1},
                'conv2': {'kernel': 2, 'bias': 3}}
     self.d2_flat = [1, 0, 3, 2]
-    self.d2_flat_jax = jax.tree_flatten(self.d2)[0]
+    self.d2_flat_jax = jax.tree.flatten(self.d2)[0]
     self.d2_named_flat = [('conv1/bias', 1), ('conv1/kernel', 0),
                           ('conv2/bias', 3), ('conv2/kernel', 2)]
     self.d2_named_flat_jax = [('conv1/bias', 1), ('conv1/kernel', 0),
@@ -135,7 +135,7 @@ class TreeTest(tf.test.TestCase):
       v1: str
     self.d3 = {'a': 0, 'flax': FlaxStruct(2.0, 1, 's')}
     self.d3_flat = [0, 1, 2.0, 's']
-    self.d3_flat_jax = jax.tree_flatten(self.d3)[0]
+    self.d3_flat_jax = jax.tree.flatten(self.d3)[0]
     self.d3_named_flat = [
         ('a', 0), ('flax/v1', 's'), ('flax/v2', 1), ('flax/v3', 2.0)]
     self.d3_named_flat_jax = [
@@ -291,7 +291,7 @@ class CheckpointTest(tf.test.TestCase):
     sharding = jax.sharding.SingleDeviceSharding(
         jax.local_devices(backend='cpu')[0]
     )
-    shardings = jax.tree_map(lambda _: sharding, ckpt)
+    shardings = jax.tree.map(lambda _: sharding, ckpt)
 
     return gacm, save_path, ckpt, shardings
 
@@ -334,7 +334,7 @@ class CheckpointTest(tf.test.TestCase):
 
   def test_keep_deletes(self):
     def x(tree, factor):  # x as in "times" for multiplying.
-      return jax.tree_map(lambda a: a * factor, tree)
+      return jax.tree.map(lambda a: a * factor, tree)
 
     gacm, save_path, ckpt, _ = self.setup()
     utils.save_checkpoint_ts(gacm, ckpt, save_path, step=100, keep=False)

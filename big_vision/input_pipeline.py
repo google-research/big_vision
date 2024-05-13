@@ -17,6 +17,7 @@ import collections
 import functools
 import itertools
 import math
+import multiprocessing.pool
 
 from absl import logging
 from big_vision.datasets import sequence_packing
@@ -110,36 +111,44 @@ def training(input_config):
   for k in per_pipeline_configs:
     assert k not in input_config, f"{k} is per-dataset in multi-input."
 
-  datasets = []
-  weights = []
-  totals = []
-
-  for dataset_name, weight in input_config.data.items():
-    if not weight: continue  # For easier sweeping.
-    dataset = input_config[dataset_name]
+  # Parallelize the loading of datasets when doing data mixture.
+  # For larger mixes, we sometimes spend >5min when doing sequentially.
+  # NOTE: functools.cache is thread-safe.
+  def _make(name_and_weight):
+    name, weight = name_and_weight
+    dataset = input_config[name]
     train_data = ds_core.get(**dataset.data)
     dataset = make_for_train(
         data=train_data.get_tfdata(ordered=False),
         # Don't batch the data just yet, it will be done after
         # mixing the different datasets below.
         batch_size=None,
-        preprocess_fn=pp_builder.get_preprocess_fn(dataset.get("pp")),
+        preprocess_fn=pp_builder.get_preprocess_fn(dataset.get("pp"), name),
         prefetch=0,  # Prefetching each pipeline leads to huge OOMs.
         **config_to_kw(dataset)
     )
     if keys := input_config.get("keep_only"):
       dataset = dataset.map(lambda d, keys=keys: {k: d[k] for k in keys})
+    return name, dataset, weight, train_data.total_examples
+
+  names, datasets, weights, totals = [], [], [], []
+  pool = multiprocessing.pool.ThreadPool(len(input_config.data))
+  for name, dataset, weight, total in pool.map(
+      # Skip weight=0 datasets as a convenient optimization in sweeps.
+      _make, ((name, w) for name, w in input_config.data.items() if w)):
+    names.append(name)
     datasets.append(dataset)
     weights.append(weight)
-    totals.append(train_data.total_examples)
-
-  logging.info(
-      "NOTE: Total dataset mix size: %d\nContributions:\n%s", sum(totals),
-      "\n".join(f"{ds}: {n}" for ds, n in zip(input_config.data, totals))
-  )
+    totals.append(total)
 
   # Normalize the weights such that they sum up to 1.
   weights = [x / sum(weights) for x in weights]
+
+  logging.info(
+      "NOTE: Total dataset mix size: %d\nContributions:\n%s", sum(totals),
+      "\n".join(f"{ds}: {n} ({w * 100:.1g}%)"
+                for ds, n, w in zip(names, totals, weights))
+  )
 
   train_ds = tf.data.Dataset.sample_from_datasets(
       datasets, weights, stop_on_empty_dataset=True)
@@ -161,7 +170,7 @@ def training(input_config):
 def make_for_inference(
     data, preprocess_fn, batch_size, num_ex_per_process,
     cache_raw=False, cache_final=False,
-    num_parallel_calls=DEFAULT_NUM_PARALLEL_CALLS,
+    num_parallel_calls=DEFAULT_NUM_PARALLEL_CALLS, prefetch=1,
 ):
   """Makes an input pipeline for inference."""
 
@@ -186,7 +195,8 @@ def make_for_inference(
   # Note we cache data after a finite number of batches is taken.
   data = data.cache() if cache_final else data
   data = data.repeat()
-  return data.prefetch(1), num_batches
+  data = data.prefetch(prefetch) if prefetch else data
+  return data, num_batches
 
 
 def _get_pad_data(data):
@@ -194,7 +204,7 @@ def _get_pad_data(data):
     # For unknown/flexible dimensions (None), just use 0 instead.
     return tf.zeros([x or 0 for x in spec.shape], spec.dtype)
 
-  zero = jax.tree_map(zeros_like_spec, data.element_spec)
+  zero = jax.tree.map(zeros_like_spec, data.element_spec)
   return tf.data.Dataset.from_tensors(zero).repeat()
 
 
@@ -219,6 +229,10 @@ def _add_tpu_host_options(data):
   options = tf.data.Options()
   options.threading.private_threadpool_size = 48
   options.threading.max_intra_op_parallelism = 1
+
+  # Stop a whole bunch of magic stuff that eats up all RAM:
+  options.experimental_optimization.inject_prefetch = False
+
   return data.with_options(options)
 
 
@@ -237,6 +251,19 @@ def prefetch_iterator(it, n):
   while queue:
     yield queue.popleft()
     enqueue(1)
+
+
+def threadstart_iterator(it):
+  """Starts an iterator right away in a background thread."""
+  # We already want to "start" the iterator in order to start the underlying
+  # dataset prefetch mechanisms, so here we get the first element. But we don't
+  # want to lose it from training, so we yield that one afterwards.
+  # (internal link)
+  pool = multiprocessing.pool.ThreadPool(processes=1)
+  first_ex_promise = pool.apply_async(lambda: next(it))
+
+  yield first_ex_promise.get()
+  yield from it
 
 
 def tf_to_numpy(x):
@@ -272,14 +299,19 @@ def tf_to_numpy(x):
 
 # Note that the order of global devices for sharding data is important and
 # should be compatible with device order used for models params, state, etc.
-def start_global(data, global_devices, n_prefetch=1, keep_on_cpu=frozenset()):
+def start_global(
+    data, global_devices, n_prefetch=1, keep_on_cpu=frozenset(), warmup=False):
   """Starts the global input pipeline."""
   def maybe_shard(name, x):
     if name in keep_on_cpu:
       return tf_to_numpy(x)
     return u.make_fsarray_from_local_slice(x, global_devices)
 
-  it = (u.tree_map_with_names(maybe_shard, elem) for elem in iter(data))
+  it = iter(data)
+  if warmup:  # actually pre-fill shuffle buffers etc.
+    it = threadstart_iterator(it)
+
+  it = (u.tree_map_with_names(maybe_shard, elem) for elem in it)
   return prefetch_iterator(it, n_prefetch)
 
 
@@ -299,7 +331,7 @@ def shard_and_put(x, shard=True, put=True):
 
 def start_input_pipeline(data, n_prefetch=1, shard=True):
   fn = functools.partial(shard_and_put, shard=shard, put=n_prefetch)
-  it = (jax.tree_util.tree_map(fn, elem) for elem in iter(data))
+  it = (jax.tree.map(fn, elem) for elem in iter(data))
   return prefetch_iterator(it, n_prefetch)
 
 

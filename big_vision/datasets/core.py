@@ -21,7 +21,7 @@ import importlib
 class DataSource:
   """The API that any data source should implement."""
 
-  def get_tfdata(self, ordered, *, process_split=True):
+  def get_tfdata(self, ordered, *, process_split=True, allow_cache=True):
     """Creates this data object as a tf.data.Dataset.
 
     This will be called separately in each process, and it is up to the dataset
@@ -32,6 +32,7 @@ class DataSource:
         it may have undefined ordering. Think of True == val, False == train.
       process_split: if False then every process receives the entire dataset
         (e.g.  for evaluators running in a single process).
+      allow_cache: whether to allow caching the opened data or not.
 
     Returns:
       A tf.data.Dataset object.

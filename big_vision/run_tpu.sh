@@ -23,7 +23,7 @@ then
 
   pip install -U pip  # Yes, really needed.
   # NOTE: doesn't work when in requirements.txt -> cyclic dep
-  pip install "jax[tpu]>=0.2.16" -f https://storage.googleapis.com/jax-releases/libtpu_releases.html
+  pip install "jax[tpu]>=0.4.25" -f https://storage.googleapis.com/jax-releases/libtpu_releases.html
   pip install -r big_vision/requirements.txt
 else
   . bv_venv/bin/activate
@@ -31,5 +31,5 @@ fi
 
 if [ $# -ne 0 ]
 then
-  env TFDS_DATA_DIR=$TFDS_DATA_DIR python3 -m "$@"
+  env TFDS_DATA_DIR=$TFDS_DATA_DIR BV_JAX_INIT=1 python3 -m "$@"
 fi

@@ -85,8 +85,8 @@ def pad_shard_unpad(wrapped, static_argnums=(0,), static_argnames=()):
 
     # Find the batch-sizes of all non-static arguments.
     def get_bs(x):
-      batch_sizes = jax.tree_util.tree_map(lambda y: y.shape[0], x)
-      return jax.tree_util.tree_flatten(batch_sizes)[0]
+      batch_sizes = jax.tree.map(lambda y: y.shape[0], x)
+      return jax.tree.flatten(batch_sizes)[0]
 
     bs_a = [get_bs(a) for i, a in enumerate(args) if i not in static_argnums]
     bs_kw = [get_bs(v) for k, v in kw.items() if k not in static_argnames]
@@ -108,7 +108,7 @@ def pad_shard_unpad(wrapped, static_argnums=(0,), static_argnames=()):
 
     def maybe_pad(x, actually_pad=True):
       if not actually_pad: return x  # For call-site convenience below.
-      return jax.tree_util.tree_map(pad, x)
+      return jax.tree.map(pad, x)
 
     args = [maybe_pad(a, i not in static_argnums) for i, a in enumerate(args)]
     kw = {k: maybe_pad(v, k not in static_argnames) for k, v in kw.items()}
@@ -117,7 +117,7 @@ def pad_shard_unpad(wrapped, static_argnums=(0,), static_argnames=()):
     def unpad(x):
       # Transfer back before cutting, to reduce on-device shape diversity.
       return einops.rearrange(jax.device_get(x), "d b ... -> (d b) ...")[:b]
-    return jax.tree_util.tree_map(unpad, out)
+    return jax.tree.map(unpad, out)
 
   return pad_shard_unpad_wrapper
 
@@ -192,12 +192,16 @@ def load_params(ckpt, **kw):
     # Potentially read out the sub-part to load from after the colon
     # '/path/to/file:img/head' => '/path/to/file', 'img/head'
     # 'gs://path/to/file' => 'gs://path/to/file', None
-    ckpt, key = re.match(r"^(.*?/.*?)(?::([\w/]+))?$", ckpt).groups()  # pytype: disable=attribute-error
+    if match := re.match(r"^(.*?/.*?)(?::([\w/]+))?$", ckpt):
+      ckpt, key = match.groups()
+    else:
+      raise ValueError(f"Weird ckpt path: {ckpt} ; Maybe prepend ./ ?")
 
     # Use the checkpoint filename to detect when we're loading old-style .npz
     # checkpoints, as opposed to new-style tensorstore checkpoint folders.
-    if ckpt.endswith(".npz"):
+    if ".npz" in ckpt:  # Not a perfect heuristic, but good enough.
       checkpoint = load_checkpoint_np(ckpt, **kw)
+      checkpoint = jax.tree.map(recover_dtype, checkpoint)
       if "params" in checkpoint:
         # Checkpoint with optax state (after (internal link)).
         params = checkpoint["params"]
@@ -333,9 +337,9 @@ def accumulate_gradient(loss_and_grad_fn, params, images, labels, accum_steps):
                                    (step_size, labels.shape[1]))
       li, gi = loss_and_grad_fn(params, imgs, lbls)
       l, g = l_and_g
-      return (l + li, jax.tree_util.tree_map(lambda x, y: x + y, g, gi))
+      return (l + li, jax.tree.map(lambda x, y: x + y, g, gi))
     l, g = jax.lax.fori_loop(1, accum_steps, acc_grad_and_loss, (l, g))
-    return jax.tree_util.tree_map(lambda x: x / accum_steps, (l, g))
+    return jax.tree.map(lambda x: x / accum_steps, (l, g))
   else:
     return loss_and_grad_fn(params, images, labels)
 
@@ -588,7 +592,7 @@ def _traverse_with_names(tree, with_inner_nodes=False):
     tree = flax.serialization.to_state_dict(tree)
   # Don't output the non-leaf nodes. If the optimizer doesn't have a state
   # the tree leaves can be Nones which was interpreted as a leaf by this
-  # function but not by the other functions (like jax.tree_util.tree_map).
+  # function but not by the other functions (like jax.tree.map).
   if tree is None:
     return
   elif isinstance(tree, Mapping):
@@ -622,7 +626,7 @@ def tree_flatten_with_names(tree):
   Returns:
     A list of values with names: [(name, value), ...]
   """
-  vals, tree_def = jax.tree_util.tree_flatten(tree)
+  vals, tree_def = jax.tree.flatten(tree)
 
   # "Fake" token tree that is use to track jax internal tree traversal and
   # adjust our custom tree traversal to be compatible with it.
@@ -643,7 +647,7 @@ def tree_unflatten(names_and_vals):
 
 
 def tree_map_with_names(f, tree, *rest):
-  """Like jax.tree_util.tree_map but with a filter on the leaf path name.
+  """Like jax.tree.map but with a filter on the leaf path name.
 
   Args:
     f: A function with first parameter `name` (path-like "a/b/c") and remaining
@@ -778,6 +782,19 @@ def tree_compare(tree1, tree2):
       for k, v in tree1.items()
       if k in tree2 and (v.dtype != tree2[k].dtype or v.shape != tree2[k].shape)
   }
+
+
+def tree_filter(tree, mask):
+  """Returns nested dict structure with only a subset of children."""
+  # TODO: The code below only works for nested-dict and only when they
+  # have same structure. Consider relax this.
+  if not isinstance(tree, dict):
+    assert isinstance(mask, bool), f"Mask leaves must be boolean! {mask}"
+    return tree
+  assert sorted(tree.keys()) == sorted(mask.keys()), (
+      f"Keys in tree and mask are not equal! {tree.keys()} != {mask.keys()}")
+  return {k: tree_filter(v, mask[k]) for k, v in tree.items()
+          if mask[k] is not False}
 
 
 def recover_dtype(a):
@@ -932,7 +949,9 @@ def tsload(path, *, tree=None, shardings=None, regex=None):
     raise ValueError("If tree is specified, regex filtering is not allowed.")
 
   if tree is None:
-    path_names = set([p.replace("~", "/") for p in gfile.listdir(path)])
+    # Some file-systems (gs://) list folders with a trailing /, get rid of it.
+    path_names = set([p.rstrip("/").replace("~", "/")
+                      for p in gfile.listdir(path)])
     regex = re.compile(regex) if regex is not None else re.compile(".*")
     path_names = [p for p in path_names if regex.match(p)]
     tree = recover_tree(path_names, [0] * len(path_names))
@@ -944,7 +963,7 @@ def tsload(path, *, tree=None, shardings=None, regex=None):
     shardings = jax.sharding.SingleDeviceSharding(
         jax.local_devices(backend="cpu")[0]
     )
-  shardings = list(jax.tree_leaves(tree_broadcast(shardings, tree)))
+  shardings = list(jax.tree.leaves(tree_broadcast(shardings, tree)))
 
   names_to_load = [os.path.join(path, name.replace("/", "~"))
                    for name in names_to_load]
@@ -1103,7 +1122,7 @@ def get_mixup(rng, p):
   a = jnp.maximum(a, 1.0 - a)  # see (internal link) for the context.
   def _mixup(*things, **more_things):
     mix = lambda thing: a * thing + (1 - a) * jnp.roll(thing, shift=1, axis=0)
-    return rng, *jax.tree_map(mix, (things, more_things))
+    return rng, *jax.tree.map(mix, (things, more_things))
   return _mixup
 
 
@@ -1160,7 +1179,7 @@ def make_mask_trees(tree, patterns, *, log=None):
 
   multimask = tree_map_with_names(matchfirst, tree)
   return [
-      jax.tree_util.tree_map(lambda matches, i=idx: matches[i], multimask)
+      jax.tree.map(lambda matches, i=idx: matches[i], multimask)
       for idx in range(len(patterns))
   ]
 
@@ -1294,8 +1313,8 @@ def tree_broadcast(prefix, target):
     prefix tree broadcasted to a target tree.
   """
   def _broadcast(leaf, subtree):
-    return jax.tree_map(lambda _: leaf, subtree)
-  return jax.tree_map(_broadcast, prefix, target)
+    return jax.tree.map(lambda _: leaf, subtree)
+  return jax.tree.map(_broadcast, prefix, target)
 
 
 def reshard(tree, shardings):
@@ -1328,9 +1347,9 @@ def reshard(tree, shardings):
           for d, s in shard.addressable_devices_indices_map(shape).items()]
     return jax.make_array_from_single_device_arrays(shape, shard, xs)
 
-  shapes = jax.tree_map(np.shape, tree)
+  shapes = jax.tree.map(np.shape, tree)
   shardings = tree_broadcast(shardings, tree)
-  return jax.tree_map(_make_global_arr, tree, shardings, shapes)
+  return jax.tree.map(_make_global_arr, tree, shardings, shapes)
 
 
 def put_cpu(x):
