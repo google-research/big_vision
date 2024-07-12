@@ -47,9 +47,9 @@ Recommended training splits:
 import json
 import os
 
+from big_vision.datasets.stvqa import val_ids
 import numpy as np
 import tensorflow_datasets as tfds
-import val_ids
 
 _VAL_IDS = val_ids.PSEUDO_VAL_IMAGE_PATHS
 

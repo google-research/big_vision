@@ -338,3 +338,24 @@ def get_clip_value_range():
   def _clip_value_range(image):
     return (tf.cast(image, tf.float32) - mean) / std
   return _clip_value_range
+
+
+@Registry.register("preprocess_ops.convert_to_video")
+@utils.InKeyOutKey()
+def get_convert_to_video(num_frames):
+  """Converts an image to a video with zero padded frames.
+
+  Args:
+    num_frames: total number of frames that the video should have.
+
+  Returns:
+    A function for converting an image to a video.
+  """
+
+  def _convert_to_video(image):
+    return tf.pad(
+        tf.expand_dims(image, axis=0),
+        [[0, num_frames - 1], [0, 0], [0, 0], [0, 0]],
+    )
+
+  return _convert_to_video

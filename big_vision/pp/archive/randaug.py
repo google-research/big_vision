@@ -13,12 +13,13 @@
 # limitations under the License.
 
 """RandAug depends on deprecated tfa.image package, now defunct."""
-from big_vision.pp import autoaugment
+
+from big_vision.pp import registry
 from big_vision.pp import utils
-from big_vision.pp.registry import Registry
+from big_vision.pp.archive import autoaugment
 
 
-@Registry.register("preprocess_ops.randaug")
+@registry.Registry.register("preprocess_ops.randaug")
 @utils.InKeyOutKey()
 def get_randaug(num_layers: int = 2, magnitude: int = 10):
   """Creates a function that applies RandAugment.
@@ -30,8 +31,8 @@ def get_randaug(num_layers: int = 2, magnitude: int = 10):
       sequentially to an image. Represented as (N) in the paper. Usually best
       values will be in the range [1, 3].
     magnitude: Integer, shared magnitude across all augmentation operations.
-      Represented as (M) in the paper. Usually best values are in the range
-      [5, 30].
+      Represented as (M) in the paper. Usually best values are in the range [5,
+      30].
 
   Returns:
     a function that applies RandAugment.
@@ -39,6 +40,7 @@ def get_randaug(num_layers: int = 2, magnitude: int = 10):
 
   def _randaug(image):
     return autoaugment.distort_image_with_randaugment(
-        image, num_layers, magnitude)
+        image, num_layers, magnitude
+    )
 
   return _randaug

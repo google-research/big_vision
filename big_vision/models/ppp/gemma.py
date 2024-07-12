@@ -24,12 +24,10 @@ We follow this einsum axis naming convention:
   H: head dim
   D: d_model ("features")
 
-Notes:
-- This model only works with pre-trained weights. Weight initialization is not
-  properly implemented.
-- init seems to be variance(1.0, fan_in, trunc_normal) everywhere.
-
 Example Colab using the models via the PaliGemma decoding logic:
+(internal link)
+
+Doc locating the variable initializers in the original code and validating them:
 (internal link)
 """
 
@@ -133,12 +131,19 @@ def _update_kv_cache(module, k, v, cache_size, cache_dtype):
   return k_cache.value.astype(k.dtype), v_cache.value.astype(v.dtype)
 
 
+def trunc_norm_init(in_axis, out_axis, batch_axis):
+  return nn.initializers.variance_scaling(
+      1.0, "fan_in", "truncated_normal",
+      in_axis=in_axis, out_axis=out_axis, batch_axis=batch_axis)
+
+
 class Einsum(nn.Module):
   shape: tuple[int, ...]
+  w_init: nn.initializers.Initializer = nn.initializers.zeros_init()
 
   @nn.compact
   def __call__(self, eqn, x):
-    w = self.param("w", nn.initializers.zeros_init(), self.shape)
+    w = self.param("w", self.w_init, self.shape)
     return jnp.einsum(eqn, x, w)
 
 
@@ -162,7 +167,9 @@ class Embedder(nn.Module):
   def setup(self):
     self.input_embedding_table = self.param(
         "input_embedding",
-        nn.initializers.zeros_init(),
+        nn.initializers.variance_scaling(
+            scale=1.0, mode="fan_in", distribution="normal",
+            in_axis=1, out_axis=0,),
         (self.vocab_size, self.embed_dim),
     )
 
@@ -189,17 +196,23 @@ class Attention(nn.Module):
     if self.num_kv_heads == self.num_heads:
       self.qkv_einsum = Einsum(
           shape=(3, self.num_heads, self.features, self.head_dim),
+          w_init=trunc_norm_init(
+              in_axis=(2,), out_axis=(0, 1, 3), batch_axis=()),
       )
     else:
       # MQA
       self.q_einsum = Einsum(
           shape=(self.num_heads, self.features, self.head_dim),
+          w_init=trunc_norm_init(in_axis=(1,), out_axis=(0, 2), batch_axis=()),
       )
       self.kv_einsum = Einsum(
           shape=(2, self.num_kv_heads, self.features, self.head_dim),
+          w_init=trunc_norm_init(
+              in_axis=(2,), out_axis=(0, 1, 3), batch_axis=()),
       )
     self.attn_vec_einsum = Einsum(
         shape=(self.num_heads, self.head_dim, self.features),
+        w_init=trunc_norm_init(in_axis=(0, 1), out_axis=(2,), batch_axis=()),
     )
 
   @nn.compact
@@ -252,7 +265,7 @@ class FeedForward(nn.Module):
   def __call__(self, x):
     w_gating = self.param(
         "gating_einsum",
-        nn.initializers.zeros_init(),
+        trunc_norm_init(in_axis=(1,), out_axis=(0, 2), batch_axis=()),
         ((2, self.features, self.hidden_dim)),
     )
     ff_gate = jnp.dot(x, w_gating[0])
@@ -263,7 +276,7 @@ class FeedForward(nn.Module):
 
     w_linear = self.param(
         "linear",
-        nn.initializers.zeros_init(),
+        trunc_norm_init(in_axis=(0,), out_axis=(1,), batch_axis=()),
         (self.hidden_dim, self.features),
     )
     outputs = jnp.dot(activations, w_linear)
@@ -327,7 +340,7 @@ class Model(nn.Module):
   num_heads: int
   num_kv_heads: int
   head_dim: int
-  norm_eps: int
+  norm_eps: float
   vocab_size: int
 
   dropout: float = 0.0
@@ -493,6 +506,7 @@ def _del_pad_rows(params):
 
 def load(init_params, init_file, model_cfg=None, dont_load=()):
   """Loads existing weights."""
+  model_cfg = model_cfg or {}
   variant = model_cfg.get("variant", "gemma_2b")
   init_variant = f"{init_file} {variant}"
   if init_variant in _ORBAX_INITS:
@@ -510,9 +524,10 @@ def load(init_params, init_file, model_cfg=None, dont_load=()):
     new_rows = (new_rows * 0.02).astype(emb1.dtype)
     return np.r_[np.asarray(emb1), new_rows]
 
-  params["embedder"]["input_embedding"] = extend_rows(
-      params["embedder"]["input_embedding"],
-      model_cfg.vocab_size,
-  )
+  if "vocab_size" in model_cfg:
+    params["embedder"]["input_embedding"] = extend_rows(
+        params["embedder"]["input_embedding"],
+        model_cfg["vocab_size"],
+    )
 
   return common.merge_params(params, init_params, dont_load)

@@ -60,8 +60,15 @@ CountBenchQA: Each image is paired with a manually generated question about the
 """
 
 _CITATION = """
+@article{beyer2024paligemma,
+      title={{PaliGemma: A versatile 3B VLM for transfer}},
+      author={Lucas Beyer and Andreas Steiner and André Susano Pinto and Alexander Kolesnikov and Xiao Wang and Daniel Salz and Maxim Neumann and Ibrahim Alabdulmohsin and Michael Tschannen and Emanuele Bugliarello and Thomas Unterthiner and Daniel Keysers and Skanda Koppula and Fangyu Liu and Adam Grycner and Alexey Gritsenko and Neil Houlsby and Manoj Kumar and Keran Rong and Julian Eisenschlos and Rishabh Kabra and Matthias Bauer and Matko Bošnjak and Xi Chen and Matthias Minderer and Paul Voigtlaender and Ioana Bica and Ivana Balazevic and Joan Puigcerver and Pinelopi Papalampidi and Olivier Henaff and Xi Xiong and Radu Soricut and Jeremiah Harmsen and Xiaohua Zhai},
+      year={2024},
+      journal={arXiv preprint arXiv:2407.07726}
+}
+
 @article{paiss2023countclip,
-      title={Teaching CLIP to Count to Ten},
+      title={{Teaching CLIP to Count to Ten}},
       author={Paiss, Roni and Ephrat, Ariel and Tov, Omer and Zada, Shiran and Mosseri, Inbar and Irani, Michal and Dekel, Tali},
       year={2023},
       journal={arXiv preprint arXiv:2302.12066}

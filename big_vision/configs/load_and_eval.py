@@ -82,7 +82,7 @@ def bit_paper(config):
         type='classification',
         data=dict(name=dataset, split=split),
         loss_name='softmax_xent',
-        cache_final=False,  # Only run once, on low-mem machine.
+        cache='none',  # Only run once, on low-mem machine.
         pp_fn=(
             'decode|resize(384)|value_range(-1, 1)'
             f'|onehot(1000, key="{lbl}", key_result="labels")'
@@ -107,7 +107,7 @@ def vit_i1k(config):
       data=dict(name='imagenet2012', split='validation'),
       pp_fn='decode|resize_small(256)|central_crop(224)|value_range(-1, 1)|onehot(1000, key="label", key_result="labels")|keep("image", "labels")',
       loss_name='softmax_xent',
-      cache_final=False,  # Only run once, on low-mem machine.
+      cache='none',  # Only run once, on low-mem machine.
   )
 
 
@@ -123,7 +123,7 @@ def mlp_mixer_i1k(config):
       data=dict(name='imagenet2012', split='validation'),
       pp_fn='decode|resize_small(256)|central_crop(224)|value_range(-1, 1)|onehot(1000, key="label", key_result="labels")|keep("image", "labels")',
       loss_name='softmax_xent',
-      cache_final=False,  # Only run once, on low-mem machine.
+      cache='none',  # Only run once, on low-mem machine.
   )
 
 
@@ -139,5 +139,5 @@ def vit_i21k(config):
       data=dict(name='imagenet21k', split='full[:51200]'),
       pp_fn='decode|resize_small(256)|central_crop(224)|value_range(-1, 1)|onehot(21843)|keep("image", "labels")',
       loss_name='sigmoid_xent',
-      cache_final=False,  # Only run once, on low-mem machine.
+      cache='none',  # Only run once, on low-mem machine.
   )

@@ -141,7 +141,7 @@ class AOkVqa(tfds.core.GeneratorBasedBuilder):
         feature_dict['answer_rationales'] = []
       yield f'{question_id}', feature_dict
 
-  def get_image_path(self, data_dir: str, split: str, image_id: int) -> np.ndarray:
+  def get_image_path(self, data_dir: str, split: str, image_id: int) -> str:
     return f'{data_dir}/{split}2017/{image_id:012d}.jpg'
 
 

@@ -83,8 +83,11 @@ XM3600_LANGUAGES = [
 class Xm3600(tfds.core.GeneratorBasedBuilder):
   """DatasetBuilder for XM3600 dataset."""
 
-  VERSION = tfds.core.Version('1.0.0')
-  RELEASE_NOTES = {'1.0.0': 'First release.'}
+  VERSION = tfds.core.Version('1.0.1')
+  RELEASE_NOTES = {
+      '1.0.0': 'First release.',
+      '1.0.1': 'Add captions/tokenized feature to compute metrics (eg CIDEr).',
+  }
 
   def _info(self):
     """Returns the metadata."""
@@ -95,7 +98,8 @@ class Xm3600(tfds.core.GeneratorBasedBuilder):
         features=tfds.features.FeaturesDict({
             'image/id': tfds.features.Text(),
             'image': tfds.features.Image(encoding_format='jpeg'),
-            'caption': tfds.features.Text(),
+            'captions': tfds.features.Sequence(tfds.features.Text()),
+            'captions/tokenized': tfds.features.Sequence(tfds.features.Text()),
             'language': tfds.features.Text(),
         }),
         supervised_keys=None,
@@ -113,17 +117,20 @@ class Xm3600(tfds.core.GeneratorBasedBuilder):
 
     annot_fname = os.path.join(_CAPTIONS_PATH, 'captions.jsonl')
     data = {}
+    tok_data = {}
     with open(annot_fname, 'r') as f:
       for line in f:
         j = json.loads(line)
         image_id = f'{j["image/key"]}_{language}'
         captions = j[language]['caption']
         data[image_id] = captions
+        tok_data[image_id] = j[language]['caption/tokenized']
 
     for image_id, captions in data.items():
       yield image_id, {
           'image/id': image_id,
           'image': os.path.join(_IMAGES_PATH, f'{image_id.split("_")[0]}.jpg'),
           'captions': captions,
+          'captions/tokenized': tok_data[image_id],
           'language': language,
       }

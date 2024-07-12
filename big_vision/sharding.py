@@ -109,15 +109,17 @@ def fsdp(axis, min_size_to_shard_mb=4):
   by the total device count.
 
   Args:
-    axis: mesh axis name for FSDP.
+    axis: mesh axis name for FSDP, or a collection of names.
     min_size_to_shard_mb: minimal tensor size to bother with sharding.
 
   Returns:
     A function that updates the sharding spec.
   """
+  axis = axis if isinstance(axis, str) else tuple(axis)
+  axis_tuple = axis if isinstance(axis, tuple) else (axis,)
   def _update_spec(cur_spec, mesh, name, x):
     shape = x.shape
-    axis_size = mesh.shape[axis]
+    axis_size = np.prod([mesh.shape[a] for a in axis_tuple])
 
     if np.prod(shape) * x.dtype.itemsize <= min_size_to_shard_mb * (2 ** 20):
       return cur_spec

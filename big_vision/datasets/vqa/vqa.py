@@ -62,7 +62,7 @@ class Vqa(tfds.core.GeneratorBasedBuilder):
   """DatasetBuilder for VQAv2 dataset."""
 
   VERSION = tfds.core.Version('3.0.0')
-  RELEASE_NOTES = {'3.0.0': 'Format as needed for OpenPaLI'}
+  RELEASE_NOTES = {'3.0.0': 'Format as needed for PaliGemma'}
 
   def _info(self) -> tfds.core.DatasetInfo:
     """Returns the metadata."""

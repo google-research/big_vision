@@ -15,7 +15,8 @@
 """Preprocessing builder."""
 
 from absl import logging
-from big_vision.pp.registry import Registry
+from big_vision.pp import registry
+import tensorflow as tf
 
 
 def get_preprocess_fn(pp_pipeline, log_data=True):
@@ -46,14 +47,15 @@ def get_preprocess_fn(pp_pipeline, log_data=True):
     ValueError: if preprocessing function name is unknown
   """
 
-  ops = []
+  names, ops = [], []
   if pp_pipeline:
-    for fn_name in pp_pipeline.split("|"):
-      if not fn_name: continue  # Skip empty section instead of error.
+    for op_spec in pp_pipeline.split("|"):
+      if not op_spec: continue  # Skip empty section instead of error.
       try:
-        ops.append(Registry.lookup(f"preprocess_ops.{fn_name}")())
+        ops.append(registry.Registry.lookup(f"preprocess_ops.{op_spec}")())
+        names.append(registry.parse_name(op_spec)[0])
       except SyntaxError as err:
-        raise ValueError(f"Syntax error on: {fn_name}") from err
+        raise ValueError(f"Syntax error on: {op_spec}") from err
 
   def _preprocess_fn(data):
     """The preprocessing function that is returned."""
@@ -62,8 +64,9 @@ def get_preprocess_fn(pp_pipeline, log_data=True):
     # Apply all the individual steps in sequence.
     if log_data:
       logging.info("Data before pre-processing (%s):\n%s", log_data, data)
-    for op in ops:
-      data = op(data)
+    for name, op in zip(names, ops):
+      with tf.name_scope(name):
+        data = op(data)
 
     # Validate input
     if not isinstance(data, dict):

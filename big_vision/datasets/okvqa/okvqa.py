@@ -169,7 +169,7 @@ class OkVqa(tfds.core.GeneratorBasedBuilder):
       }
       yield f'{question_id}', feature_dict
 
-  def get_image_path(self, data_dir: str, split: str, image_id: int) -> np.ndarray:
+  def get_image_path(self, data_dir: str, split: str, image_id: int) -> str:
     subdir = {'train': 'train2014', 'val': 'val2014'}[split]
     return f'{data_dir}/{subdir}/COCO_{subdir}_{image_id:012d}.jpg'
 

@@ -245,6 +245,9 @@ def prefetch_iterator(it, n):
 
   def enqueue(n_steps):  # Enqueues *up to* `n` elements from the iterator.
     for data in itertools.islice(it, n_steps):
+      # Prefetching will parallelize any processing that happens in a different
+      # thread (like `jax.device_put()`), but it will be of no use for
+      # processing that happens in the same thread.
       queue.append(data)
 
   enqueue(n)  # Fill up the buffer.

@@ -18,9 +18,11 @@ r"""AI2D TFDS converter.
 
 It's a small dataset, so can be built locally. Copy the data to local disk:
 
-  mkdir -p /tmp/data/ai2d
-  unzip -d /tmp Downloads/ai2d-all.zip
-  mv Downloads/ai2d_test_ids.csv /tmp/ai2d/
+  mkdir -p /tmp/data/ai2d && cd /tmp/data/ai2d
+  wget https://ai2-public-datasets.s3.amazonaws.com/diagrams/ai2d-all.zip
+  wget https://s3-us-east-2.amazonaws.com/prior-datasets/ai2d_test_ids.csv
+  wget https://github.com/googlefonts/dm-fonts/raw/main/Sans/fonts/ttf/DMSans-Regular.ttf
+  unzip ai2d-all.zip
 
 Also download a font for rendering, set the location in the flag font_path.
 
@@ -66,10 +68,11 @@ _CITATION = """
 
 
 _INPUT_PATH = flags.DEFINE_string(
-    'input_path', '/tmp/ai2d/', 'Downloaded AI2D data.'
+    'input_path', '/tmp/data/ai2d/', 'Downloaded AI2D data.'
 )
 _FONT_PATH = flags.DEFINE_string(
-    'font_path', '/tmp/DMSans-Regular.ttf', 'Font for rendering annotations.'
+    'font_path', '/tmp/data/ai2d/DMSans-Regular.ttf',
+    'Font for rendering annotations.'
 )
 
 
@@ -112,7 +115,7 @@ class Ai2d(tfds.core.GeneratorBasedBuilder):
     all_test_ids = [line.strip() for line in all_test_ids]
 
     all_annotation_paths = glob.glob(
-        os.path.join(_INPUT_PATH.value, 'questions', '*.json'))
+        os.path.join(_INPUT_PATH.value, 'ai2d/questions', '*.json'))
     for annotation_path in all_annotation_paths:
       basename = os.path.basename(annotation_path)
       image_id = basename.split('.')[0]
@@ -122,7 +125,7 @@ class Ai2d(tfds.core.GeneratorBasedBuilder):
         continue
 
       text_annotation_path = os.path.join(
-          _INPUT_PATH.value, 'annotations', basename
+          _INPUT_PATH.value, 'ai2d/annotations', basename
       )
       with open(annotation_path, 'r') as f:
         with open(text_annotation_path, 'r') as g:
@@ -168,7 +171,8 @@ def _create_image(
     annotation: Dict[str, Any], text_annotation: Dict[str, Any]
 ) -> bytes:
   """Adds image to one annotation."""
-  img_path = os.path.join(_INPUT_PATH.value, 'images', annotation['image_name'])
+  img_path = os.path.join(_INPUT_PATH.value, 'ai2d/images',
+                          annotation['image_name'])
   with open(img_path, 'rb') as f:
     if annotation['abc_label']:
       raw_image = _draw_text(f, text_annotation)
@@ -177,7 +181,7 @@ def _create_image(
   return raw_image
 
 
-def _draw_text(image: bytes, text_annotations: Dict[str, Any]) -> bytes:
+def _draw_text(image, text_annotations) -> bytes:
   """Replaces text in image by the correct replacement letter from AI2D."""
   image = Image.open(image)
   draw = ImageDraw.Draw(image)

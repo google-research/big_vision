@@ -50,8 +50,12 @@ def combine_and_keep_eval(text_len, keep=tuple(), before=(), sep='\n'):
       # and the mask accordingly as [0 0 1] (with repeats of respective lengths)
       tok(key='prefix', bos='yes'),
       tok(key='septok', text=sep),
+      # At eval time, there can be also a suffix key in the data. If so it is
+      # tokenized without EOS and decoding will continue from it.
+      'setdefault("suffix", "")',
+      tok(key='suffix', eos='no'),
       # If masks confuse you, see (internal link)
-      'masked_concat(["prefix", "septok"], mask_ar=[0, 0], mask_input=[1, 1])',
+      'masked_concat(["prefix", "septok", "suffix"], mask_ar=[0, 0, 1], mask_input=[1, 1, 1])',  # pylint: disable=line-too-long
       f'tolen({text_len}, pad_value=0, key="text")',  # value doesn't matter.
       f'tolen({text_len}, pad_value=1, key="mask_ar")',
       f'tolen({text_len}, pad_value=0, key="mask_input")',

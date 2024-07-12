@@ -75,6 +75,7 @@ def add_eval(c, res, text_len=32, **kw):
   ]:
     c.evals[f'ocrvqa/{name}'] = dict(
         type='proj.paligemma.transfers.vqa',
+        to_lower=True,
         pred='decode', pred_kw={'max_decode_len': text_len},
         data={**training_data(res, final_split=True, text_len=text_len).data, 'split': split},
         log_percent=freq, skip_first=freq == 1, tokenizer=TOKENIZER, pp_fn=pp)

@@ -53,6 +53,7 @@ def add_eval(c, res, text_len=48, **kw):
   pp = '|'.join([
       f'decode|resize({res})|value_range(-1, 1)',
       'strfmt("answer en {question}", outkey="prefix")',
+      'copy("image/filename", "question_id")',
       combine_and_keep_eval(text_len, keep=('answers', 'question_id')),
   ])
 
@@ -65,6 +66,7 @@ def add_eval(c, res, text_len=48, **kw):
         type='proj.paligemma.transfers.vqa',
         pred='decode', pred_kw={'max_decode_len': text_len},
         outfile=f'{{workdir}}/vizwiz_{name}.json',
+        out_question_key='image',
         data={**training_data(res, True, text_len).data, 'split': split},
         log_percent=freq, tokenizer=TOKENIZER, pp_fn=pp)
     c.evals[f'vizwizvqa/{name}'].update(kw)
