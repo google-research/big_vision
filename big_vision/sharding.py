@@ -158,3 +158,40 @@ def logical_partitioning():
       return nn.logical_to_mesh_axes(cur_spec.names)
     return cur_spec
   return _update_spec
+
+
+@Registry.register("shardings.shard_dim")
+def shard_dim(axis, dim, ignore_ndim_error=False):
+  """Shards the given dimension along the given axis.
+
+  Args:
+    axis: mesh axis name for sharding.
+    dim: dimension to shard (can be negative).
+    ignore_ndim_error: if True, a warning error is logged instead of raising an
+      exception when the given dimension is not compatible with the number of
+      dimensions of the array.
+
+  Returns:
+    A function that updates the sharding spec.
+  """
+  def _update_spec(cur_spec, mesh, name, x):
+    del mesh, x
+    if np.abs(dim) >= len(cur_spec):
+      msg = f"Cannot shard_dim({axis}, {dim}): name={name} cur_spec={cur_spec}"
+      if ignore_ndim_error:
+        logging.warning(msg)
+        return cur_spec
+      else:
+        raise ValueError(msg)
+    pos_dim = dim
+    if pos_dim < 0:
+      pos_dim += len(cur_spec)
+    if cur_spec[pos_dim] is not None:
+      raise ValueError(
+          f"Already sharded: shard_dim({axis}, {dim}):"
+          f" name={name} cur_spec={cur_spec}"
+      )
+    new_spec = cur_spec[:pos_dim] + (axis,) + cur_spec[pos_dim + 1 :]
+    return new_spec
+
+  return _update_spec
