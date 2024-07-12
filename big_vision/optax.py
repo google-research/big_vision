@@ -51,6 +51,24 @@ def replace_frozen(schedule, pytree, replacement, log=None):
       lambda v, f: replacement if f else v, pytree, frozen_mask)
 
 
+def clip_by_per_example_global_norm(
+    max_norm: float,
+) -> optax.GradientTransformation:
+  """Clips the norm of per-example gradients."""
+
+  def init_fn(params):
+    del params
+    return optax.EmptyState()
+
+  def update_fn(updates, state, params=None):
+    del params
+    grads_flat, grads_treedef = jax.tree_util.tree_flatten(updates)
+    clipped, _ = optax.per_example_global_norm_clip(grads_flat, max_norm)
+    return jax.tree_util.tree_unflatten(grads_treedef, clipped), state
+
+  return optax.GradientTransformation(init_fn, update_fn)
+
+
 def make(config, params, *, sched_kw):
   """Returns gradient transform and learning rate functions."""
 
@@ -76,10 +94,14 @@ def make(config, params, *, sched_kw):
   ]
 
   # Gradient clipping.
-  grad_clip_norm_tx = (
-      optax.masked(optax.clip_by_global_norm(config.grad_clip_norm),
-                   not_frozen_mask)
-      if config.get("grad_clip_norm") else optax.identity())
+  if clip_norm := config.get("grad_clip_norm"):
+    if config.get("grad_clip_per_example"):
+      clip_tx = clip_by_per_example_global_norm(clip_norm)
+    else:
+      clip_tx = optax.clip_by_global_norm(clip_norm)
+    grad_clip_norm_tx = optax.masked(clip_tx, not_frozen_mask)
+  else:
+    grad_clip_norm_tx = optax.identity()
 
   # Optimizer updates.
   tx_func = operator.attrgetter(config.optax_name)(optax)

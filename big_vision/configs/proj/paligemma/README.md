@@ -16,8 +16,11 @@ exploration.
 
 This is the reference repository of the model, you may also want to check out the resources on
 
+ - [ArXiv](https://arxiv.org/abs/2407.07726): Technical report.
  - [Kaggle](https://www.kaggle.com/models/google/paligemma):
- All checkpoints and model card.
+ All pre-trained / mix checkpoints and model card.
+ - [Kaggle-FT](https://www.kaggle.com/models/google/paligemma-ft):
+ All fine-tuned checkpoints and model card.
  - [VertexAI Model Garden](https://console.cloud.google.com/vertex-ai/publishers/google/model-garden/363):
  Paligemma models on GCP.
  - [Hugging Face](https://huggingface.co/google/paligemma-3b-pt-224):
@@ -26,6 +29,17 @@ This is the reference repository of the model, you may also want to check out th
   Lightweight colab for fine-tuning PaliGemma. It can be run on a single T4 GPU (16GB)
   available on free Colab.
  - [HuggingFace demo](https://hf.co/spaces/google/paligemma): live demo.
+
+### Citation BibTeX
+
+```
+@article{beyer2024paligemma,
+      title={{PaliGemma: A versatile 3B VLM for transfer}},
+      author={Lucas Beyer and Andreas Steiner and André Susano Pinto and Alexander Kolesnikov and Xiao Wang and Daniel Salz and Maxim Neumann and Ibrahim Alabdulmohsin and Michael Tschannen and Emanuele Bugliarello and Thomas Unterthiner and Daniel Keysers and Skanda Koppula and Fangyu Liu and Adam Grycner and Alexey Gritsenko and Neil Houlsby and Manoj Kumar and Keran Rong and Julian Eisenschlos and Rishabh Kabra and Matthias Bauer and Matko Bošnjak and Xi Chen and Matthias Minderer and Paul Voigtlaender and Ioana Bica and Ivana Balazevic and Joan Puigcerver and Pinelopi Papalampidi and Olivier Henaff and Xi Xiong and Radu Soricut and Jeremiah Harmsen and Xiaohua Zhai},
+      year={2024},
+      journal={arXiv preprint arXiv:2407.07726}
+}
+```
 
 ## Model description
 
@@ -173,6 +187,7 @@ Benchmark (train split) | Metric (split) | pt-224 | pt-448 | pt-896
 [VQAv2](https://visualqa.org/index.html) (train+validation) | Accuracy (Test server - std) | 83.19 | 85.64 | 
 [MMVP](https://arxiv.org/abs/2401.06209) (Eval of VQAv2 transfer) | Paired Accuracy | 47.33 | 45.33 | 
 [POPE](https://arxiv.org/abs/2305.10355) (Eval of VQAv2 transfer) | Accuracy (random / popular / adversarial) | 87.80 / 85.87 / 84.27 | 88.23 / 86.77 / 85.90 | 
+[Objaverse Multiview](https://arxiv.org/abs/2311.17851) (Eval of VQAv2 transfer) | Cosine Similarity (USEv4) | 62.7 | 62.8 | 
 [OKVQA](https://okvqa.allenai.org/) (train) | Accuracy (val) | 63.54 | 63.15 | 
 [A-OKVQA](https://allenai.org/project/a-okvqa/home) (MC) (train+val) | Accuracy (Test server) | 76.37 | 76.90 | 
 [A-OKVQA](https://allenai.org/project/a-okvqa/home) (DA) (train+val) | Accuracy (Test server) | 61.85 | 63.22 | 
@@ -187,7 +202,7 @@ Benchmark (train split) | Metric (split) | pt-224 | pt-448 | pt-896
 [ChartQA](https://arxiv.org/abs/2203.10244) (human+aug)x(train+val) | Mean Relaxed Accuracy (test_human, test_aug) | 57.08 | 71.36 | 
 [VizWiz](https://vizwiz.org/tasks-and-datasets/vqa/) VQA (train+val) | Accuracy (Test server - std) | 73.7 | 75.52 | 
 [TallyQA](https://arxiv.org/abs/1810.12440) (train) | Accuracy (test_simple/test_complex) | 81.72 / 69.56 | 84.86 / 72.27 | 
-[OCR-VQA](https://ocr-vqa.github.io/) (train+val) | Accuracy (test) | 72.32 | 74.61 | 74.93
+[OCR-VQA](https://ocr-vqa.github.io/) (train+val) | Accuracy (test) | 73.24 | 75.60 | 75.90
 [TextVQA](https://textvqa.org/) (train+val) | Accuracy (Test server - std) | 55.47 | 73.15 | 76.48
 [DocVQA](https://www.docvqa.org/) (train+val) | ANLS (Test server) | 43.74 | 78.02 | 84.77
 [Infographic VQA](https://openaccess.thecvf.com/content/WACV2022/papers/Mathew_InfographicVQA_WACV_2022_paper.pdf) (train+val) | ANLS (Test server) | 28.46 | 40.47 | 47.75
@@ -252,109 +267,4 @@ If you want to use TFDS-based data, check out other transfer configs. Remember t
 
 ## Model Development Contributions
 
-### Core Contributors
-
-Lucas Beyer \
-Andreas Steiner \
-André Susano Pinto \
-Alexander Kolesnikov \
-Xiao Wang \
-Xiaohua Zhai
-
-### Contributors
-
-Daniel Salz \
-Maxim Neumann \
-Ibrahim Alabdulmohsin \
-Michael Tschannen \
-Jeremiah Harmsen \
-Daniel Keysers \
-Neil Houlsby \
-Xi Chen \
-Emanuele Bugliarello \
-Thomas Unterthiner \
-Keran Rong \
-Matthias Minderer \
-Ioana Bica \
-Ivana Balazevic \
-Joan Puigcerver \
-Julian Eisenschlos \
-Manoj Kumar \
-Matko Bošnjak \
-Matthias Bauer \
-Fangyu Liu \
-Adam Grycner \
-Alexey Gritsenko \
-Paul Voigtlaender \
-Pinelopi Papalampidi \
-Olivier Henaff \
-Skanda Koppula \
-Xi Xiong \
-Radu Soricut
-
-### Leads
-
-Xiaohua Zhai \
-Lucas Beyer
-
-## Model Release Contributions and General Support
-
-### PM
-
-Tris Warkentin
-
-### Go-to-Market 
-
-Kat Black \
-Luiz Gustavo Martins \
-Glenn Cameron \
-Raj Gundluru \
-Manvinder Singh
-
-### Kaggle
-
-Meg Risdal \
-Nilay Chauhan \
-Nate Keating \
-Nesh Devanathan
-
-
-### Documentation
-
-Elisa Bandy \
-Joe Fernandez
-
-### Ethics and Safety
-
-Antonia Paterson \
-Jenny Brennan \
-Tom Eccles \
-Pankil Botadra \
-Ben Bariach
-
-### Vertex AI
-
-Lav Rai \
-Minwoo Park \
-Dustin Luong \
-Daniel Vlasic \
-Bo Wu \
-Wenming Ye
-
-### Keras
-
-Divya S \
-Jeff Carpenter \
-Kiranbir Sodhia
-
-### Gemma Model
-
-Alek Andreev \
-Armand Joulin \
-Surya Bhupatiraju \
-Minh Giang
-
-### Executive Sponsors
-
-Joelle Barral \
-Zoubin Ghahramani
+See the [technical report](https://arxiv.org/abs/2407.07726)'s Appendix.

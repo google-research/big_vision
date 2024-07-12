@@ -137,11 +137,13 @@ def main(argv):
   # Because jax.utils do not support `-1` shape size.
   mesh_size = np.array(jax.devices()).reshape(mesh_size).shape
 
-  device_mesh = mesh_utils.create_device_mesh(mesh_size)
+  device_mesh = mesh_utils.create_device_mesh(
+      mesh_size, allow_split_physical_axes=config.get(
+          "mesh_allow_split_physical_axes", False))
 
   # Consistent device order is important to ensure correctness of various train
   # loop components, such as input pipeline, update step, evaluators. The
-  # order presribed by the `devices_flat` variable should be used throughout
+  # order prescribed by the `devices_flat` variable should be used throughout
   # the program.
   devices_flat = device_mesh.flatten()
 

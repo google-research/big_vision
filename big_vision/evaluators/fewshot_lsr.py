@@ -13,7 +13,7 @@
 # limitations under the License.
 
 """Utils for few-shot evaluation."""
-# pylint: disable=consider-using-from-import
+# pylint: disable=consider-using-from-import,g-importing-member
 
 import functools
 
@@ -118,7 +118,7 @@ class Evaluator:
                datasets, shots, l2_reg,
                pp_train, pp_eval, display_first,
                representation_layer=None, num_seeds=3,
-               label_key="label", mask_key="_mask", *,
+               label_key="label", mask_key="_mask", data_dir=None, *,
                devices):
     self.datasets = datasets
     self.shots = shots
@@ -132,7 +132,7 @@ class Evaluator:
     self.num_seeds = num_seeds
     self.label_key = label_key
     self.mask_key = mask_key
-
+    self.data_dir = data_dir
     self.devices = devices
     self.mesh = jax.sharding.Mesh(devices, ("devices",))
     self.repr_fn = self.get_representation_fn(
@@ -158,19 +158,24 @@ class Evaluator:
       return self._datasets[key]
     except KeyError:
       # NOTE: only supporting TFDS data for now for bwd compat/lazyness.
-      train_data = ds_core.get(name=dataset, split=train_split)
+      train_data = ds_core.get(
+          name=dataset, split=train_split, data_dir=self.data_dir
+      )
+      test_data = ds_core.get(
+          name=dataset, split=test_split, data_dir=self.data_dir
+      )
       train_ds, batches_tr = input_pipeline.make_for_inference(
           train_data.get_tfdata(ordered=True),
           num_ex_per_process=train_data.num_examples_per_process(),
           batch_size=self.batch_size,
           preprocess_fn=pp_builder.get_preprocess_fn(self.pp_tr))
-      test_data = ds_core.get(name=dataset, split=test_split)
       test_ds, batches_te = input_pipeline.make_for_inference(
           test_data.get_tfdata(ordered=True),
           num_ex_per_process=test_data.num_examples_per_process(),
           batch_size=self.batch_size,
           preprocess_fn=pp_builder.get_preprocess_fn(self.pp_te))
-      num_classes = train_data.builder.info.features["label"].num_classes
+
+      num_classes = train_data.builder.info.features[self.label_key].num_classes
       return self._datasets.setdefault(
           key, (train_ds, batches_tr, test_ds, batches_te, num_classes))
 

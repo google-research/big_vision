@@ -48,6 +48,22 @@ def training_data(res, text_len=32):
   return c
 
 
+def countbenchqa_eval_data(res, text_len=32):
+  """Creates eval data config for CountBenchQA."""
+  c = bvcc.parse_arg('')  # Just make a configdict without extra import.
+  c.data = dict(
+      name='countbenchqa',
+      split='huggingface',
+  )
+  c.pp = '|'.join([
+      f'decode|resize({res}, antialias=True)|value_range(-1, 1)',
+      'strfmt("answer en {question}", outkey="prefix")',
+      'strfmt("{number}", outkey="answer")',
+      combine_and_keep_eval(text_len, keep=('answer',)),
+  ])
+  return c
+
+
 def add_eval(c, res, text_len=32, **kw):
   """Add eval configs."""
   tallyqa_pp_eval = '|'.join([
@@ -68,6 +84,17 @@ def add_eval(c, res, text_len=32, **kw):
         data={**training_data(res, text_len).data, 'split': split},
         log_percent=freq, tokenizer=TOKENIZER, pp_fn=tallyqa_pp_eval)
     c.evals[f'tallyqa/{name}'].update(kw)
+
+  # CountBenchQA eval. We use the TallyQA eval for this but just pass in
+  # different data.
+  c.evals['countbenchqa/eval'] = dict(
+      type='proj.paligemma.transfers.tallyqa',
+      pred='decode', pred_kw={'max_decode_len': text_len},
+      data=countbenchqa_eval_data(res, text_len).data,
+      log_percent=0.1,  # This is a very small and cheap eval set.
+      tokenizer=TOKENIZER,
+      pp_fn=countbenchqa_eval_data(res, text_len).pp)
+  c.evals['countbenchqa/eval'].update(kw)
 
 
 def add_eval_pplx(c, res, text_len=32):
@@ -155,6 +182,7 @@ def metrics(arg=None):  # pylint: disable=unused-argument
   """Returns a list of metric names."""
   return [
       'training_loss',
+      'countbenchqa/eval/acc',
       'tallyqa/minitrain/pplx/avg',
       'tallyqa/eval/pplx/avg',
       'tallyqa/eval/acc',

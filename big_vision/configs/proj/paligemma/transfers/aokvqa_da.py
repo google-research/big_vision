@@ -62,7 +62,7 @@ def add_eval(c, res, text_len=32, **kw):
       (1/4, 'eval', 'val'),              # To tune hparams.
       (1.0, 'test', 'test'),             # To compute final predictions.
   ]:
-    c.evals[f'aokvqa/{name}'] = dict(
+    c.evals[f'aokvqa_da/{name}'] = dict(
         type='proj.paligemma.transfers.vqa',
         pred='decode', pred_kw={'max_decode_len': text_len},
         outfile=f'{{workdir}}/aokvqa_da_{name}.json',
@@ -79,7 +79,7 @@ def add_eval_pplx(c, res, text_len=32):
       ('minitrain', 'train[:5%]'),  # To gauge memorization.
       ('eval', 'val'),              # To tune hparams.
   ]:
-    c.evals[f'aokvqa/{name}/pplx'] = dict(
+    c.evals[f'aokvqa_da/{name}/pplx'] = dict(
         type='proj.paligemma.perplexity', pred='logits',
         key='text', shift_labels=True,
         log_percent=0.05,  # Eval ~20x per run; it's cheap.

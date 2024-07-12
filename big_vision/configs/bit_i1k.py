@@ -41,9 +41,9 @@ def get_config(runlocal=False):
       name='imagenet2012',
       split='train[:99%]',
   )
-  config.input.batch_size = 4096 if not runlocal else 32
-  config.input.cache_raw = not runlocal  # Needs up to 120GB of RAM!
-  config.input.shuffle_buffer_size = 250_000 if not runlocal else 10_000  # Per host.
+  config.input.batch_size = 4096
+  config.input.cache_raw = True  # Needs up to 120GB of RAM!
+  config.input.shuffle_buffer_size = 250_000  # Per host.
 
   pp_common = '|onehot(1000, key="{lbl}", key_result="labels")'
   pp_common += '|value_range(-1, 1)|keep("image", "labels")'
@@ -77,7 +77,7 @@ def get_config(runlocal=False):
         pp_fn=pp_eval.format(lbl='label'),
         loss_name=config.loss,
         log_steps=1000,  # Very fast O(seconds) so it's fine to run it often.
-        cache_final=not runlocal,
+        cache='final_data',
     )
   config.evals = {}
   config.evals.train = get_eval('train[:2%]')
@@ -89,5 +89,14 @@ def get_config(runlocal=False):
 
   # config.evals.fewshot = get_fewshot_lsr(runlocal=runlocal)
   # config.evals.fewshot.log_steps = 1000
+
+  if runlocal:
+    config.input.batch_size = 32
+    config.input.cache_raw = False
+    config.input.shuffle_buffer_size = 100
+
+    local_eval = config.evals.val
+    config.evals = {'val': local_eval}
+    config.evals.val.cache = 'none'
 
   return config
