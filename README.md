@@ -65,8 +65,11 @@ codebase:
 - (partial) [Finite Scalar Quantization: VQ-VAE Made Simple](https://arxiv.org/abs/2309.15505), by
   Fabian Mentzer, David Minnen, Eirikur Agustsson, Michael Tschannen.
 - [GIVT: Generative Infinite-Vocabulary Transformers](https://arxiv.org/abs/2312.02116), by
-  Michael Tschannen, Cian Eastwood, Fabian Mentzer\
+  Michael Tschannen, Cian Eastwood, Fabian Mentzer.\
   Resources: [readme](big_vision/configs/proj/givt/README.md), [config](big_vision/configs/proj/givt/givt_imagenet2012.py), [colab](https://colab.research.google.com/github/google-research/big_vision/blob/main/big_vision/configs/proj/givt/givt_demo_colab.ipynb).
+- [Unified Auto-Encoding with Masked Diffusion](https://arxiv.org/abs/2406.17688), by
+  Philippe Hansen-Estruch, Sriram Vishwanath, Amy Zhang, Manan Tomar.
+
 
 ### Multimodal research
 
@@ -88,6 +91,14 @@ codebase:
 - [Three Towers: Flexible Contrastive Learning with Pretrained Image Models](https://arxiv.org/abs/2305.16999), by Jannik Kossen, Mark Collier, Basil Mustafa, Xiao Wang, Xiaohua Zhai, Lucas Beyer, Andreas Steiner, Jesse Berent, Rodolphe Jenatton, Efi Kokiopoulou.
 - (partial) [PaLI: A Jointly-Scaled Multilingual Language-Image Model](https://arxiv.org/abs/2209.06794), by Xi Chen, Xiao Wang, Soravit Changpinyo, *wow so many middle authors*, Anelia Angelova, Xiaohua Zhai, Neil Houlsby, Radu Soricut.
 - (partial) [PaLI-3 Vision Language Models: Smaller, Faster, Stronger](https://arxiv.org/abs/2310.09199), by Xi Chen, Xiao Wang, Lucas Beyer, Alexander Kolesnikov, Jialin Wu, Paul Voigtlaender, Basil Mustafa, Sebastian Goodman, Ibrahim Alabdulmohsin, Piotr Padlewski, Daniel Salz, Xi Xiong, Daniel Vlasic, Filip Pavetic, Keran Rong, Tianli Yu, Daniel Keysers, Xiaohua Zhai, Radu Soricut.
+- [LocCa](https://arxiv.org/abs/2403.19596), by
+  Bo Wan, Michael Tschannen, Yongqin Xian, Filip Pavetic, Ibrahim Alabdulmohsin, Xiao Wang, André Susano Pinto, Andreas Steiner, Lucas Beyer, Xiaohua Zhai.
+- [PaliGemma](https://arxiv.org/abs/2407.07726), by *wow many authors*.\
+- Resources: [readme](big_vision/configs/proj/paligemma/README.md),
+    [model](big_vision/models/proj/paligemma/paligemma.py),
+    [transfer configs](big_vision/configs/proj/paligemma/transfers),
+    [datasets](big_vision/datasets),
+    [CountBenchQA](big_vision/datasets/countbenchqa/data/countbench_paired_questions.json).
 
 ### Training
 
@@ -107,8 +118,9 @@ codebase:
 ### Misc
 
 - [Are we done with ImageNet?](https://arxiv.org/abs/2006.07159), by
-  Lucas Beyer*, Olivier J. Hénaff*, Alexander Kolesnikov*, Xiaohua Zhai*,
-  and Aäron van den Oord*
+  Lucas Beyer*, Olivier J. Hénaff*, Alexander Kolesnikov*, Xiaohua Zhai*, Aäron van den Oord*.
+- [No Filter: Cultural and Socioeconomic Diversity in Contrastive Vision-Language Models](https://arxiv.org/abs/2405.13777), by
+  Angéline Pouget, Lucas Beyer, Emanuele Bugliarello, Xiao Wang, Andreas Peter Steiner, Xiaohua Zhai, Ibrahim Alabdulmohsin.
 
 # Codebase high-level organization and principles in a nutshell
 
