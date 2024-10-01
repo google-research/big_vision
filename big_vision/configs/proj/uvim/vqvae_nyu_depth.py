@@ -36,7 +36,7 @@ def get_config(arg='res=512,patch_size=16'):
   config.task = 'proj.uvim.depth_task'
 
   config.input = {}
-  config.input.data = dict(name='nyu_depth_v2', split='train)
+  config.input.data = dict(name='nyu_depth_v2', split='train')
 
   config.input.batch_size = 1024
   config.input.shuffle_buffer_size = 25_000
