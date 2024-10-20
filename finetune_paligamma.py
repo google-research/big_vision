@@ -1,17 +1,16 @@
 import os
+import shutil
+
 os.environ["CUDA_VISIBLE_DEVICES"] = "3,4,5"
 os.environ["KAGGLE_USERNAME"] = "milliewu1"
 os.environ["KAGGLE_KEY"] = "9005588500915e31a0bc757e9c53a3ed"
 
 import base64
 import functools
-import html
 import io
 import subprocess
 import warnings
-import sys
 
-import cp
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -20,7 +19,6 @@ import ml_collections
 import tensorflow as tf
 import sentencepiece
 
-from IPython.core.display import display, HTML
 from PIL import Image
 import matplotlib.pyplot as plt
 
@@ -48,7 +46,7 @@ for device in devices:
     print(device)
 
 
-SAVE_DIR = "/home/millie/ReNaAnalysis/big_vision/ckpts"
+SAVE_DIR = "/media/nvme0-leo/big_vision/ckpts"
 MODEL_PATH = os.path.join(SAVE_DIR, "pt_224_128.params.f16.npz")
 
 os.makedirs(SAVE_DIR, exist_ok=True)
@@ -60,19 +58,19 @@ if not os.path.exists(MODEL_PATH):
   download_path = kagglehub.model_download("google/paligemma/jax/paligemma-3b-pt-224")
   if download_path:
     # Move or rename the downloaded file to the target directory
-    os.rename(download_path, MODEL_PATH)
+    shutil.move(download_path, MODEL_PATH)
   print(f"Model path: {MODEL_PATH}")
 
-TOKENIZER_PATH = "/home/millie/ReNaAnalysis/big_vision/ckpts/tokenizer.model"
+TOKENIZER_PATH = "/media/nvme0-leo/big_vision/ckpts/tokenizer.model"
 if not os.path.exists(TOKENIZER_PATH):
     print("Downloading the model tokenizer...")
-    subprocess.run(["/home/millie/ReNaAnalysis/big_vision/big_vision_env/bin/gsutil", "cp", "gs://big_vision/paligemma_tokenizer.model", TOKENIZER_PATH], check=True)
+    subprocess.run(["/home/leo/ReNaAnalysis/big_vision_venv/bin/gsutil", "cp", "gs://big_vision/paligemma_tokenizer.model", TOKENIZER_PATH], check=True)
     print(f"Tokenizer path: {TOKENIZER_PATH}")
 
-DATA_DIR = "/home/millie/ReNaAnalysis/big_vision/longcap100"
+DATA_DIR = "/media/nvme0-leo/big_vision/longcap100"
 if not os.path.exists(TOKENIZER_PATH):
     print("Downloading the dataset...")
-    subprocess.run(["/home/millie/ReNaAnalysis/big_vision/big_vision_env/bin/gsutil", "-m", "-q", "cp", "-n", "-r", "gs://longcap100/", DATA_DIR], check=True)
+    subprocess.run(["/home/leo/ReNaAnalysis/big_vision_venv/bin/gsutil", "-m", "-q", "cp", "-n", "-r", "gs://longcap100/", DATA_DIR], check=True)
     print(f"Data path: {DATA_DIR}")
 
 # Define model
