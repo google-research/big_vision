@@ -1,7 +1,7 @@
 import os
 import shutil
 
-os.environ["CUDA_VISIBLE_DEVICES"] = "3,4,5"
+os.environ["CUDA_VISIBLE_DEVICES"] = "0, 1, 2"
 os.environ["KAGGLE_USERNAME"] = "milliewu1"
 os.environ["KAGGLE_KEY"] = "9005588500915e31a0bc757e9c53a3ed"
 
@@ -68,9 +68,9 @@ if not os.path.exists(TOKENIZER_PATH):
     print(f"Tokenizer path: {TOKENIZER_PATH}")
 
 DATA_DIR = "/media/nvme0-leo/big_vision/longcap100"
-if not os.path.exists(TOKENIZER_PATH):
+if not os.path.exists(DATA_DIR):
     print("Downloading the dataset...")
-    subprocess.run(["/home/leo/ReNaAnalysis/big_vision_venv/bin/gsutil", "-m", "-q", "cp", "-n", "-r", "gs://longcap100/", DATA_DIR], check=True)
+    subprocess.run(["/home/leo/ReNaAnalysis/big_vision_venv/bin/gsutil", "-m", "-q", "cp", "-n", "-r", "gs://longcap100/", os.path.dirname(DATA_DIR)], check=True)
     print(f"Data path: {DATA_DIR}")
 
 # Define model
@@ -232,7 +232,7 @@ def validation_data_iterator():
     }
 
 
-TEST_OUT_DIR = "/home/millie/ReNaAnalysis/big_vision/test_outputs"
+TEST_OUT_DIR = "/media/nvme0-leo/big_vision/test_outputs"
 
 def render_image(image, caption, idx, stage , step = 0, output_dir = TEST_OUT_DIR):
     """Render image with caption and save as a figure."""
