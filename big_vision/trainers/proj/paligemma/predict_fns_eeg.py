@@ -122,6 +122,7 @@ def _decode_with_logp(
   # Setting `eos_look_behind>0` removes blocking transfer with small batches.
   stops = collections.deque(maxlen=1 + eos_look_behind)
   for idx in range(max_decode_len):
+    print(f"_decode_with_logp: step {idx}")
     tokens, state = decode_sample_output(
         state, logits, max_decode_len=max_decode_len, sampler=sampler
     )
