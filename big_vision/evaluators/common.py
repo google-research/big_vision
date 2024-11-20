@@ -185,7 +185,7 @@ def resolve_outfile(outfile, split="", **kw):
 
   return outfile.format(
       workdir=flags.FLAGS.workdir,
-      split="".join(c if c not in "[]%:" else "_" for c in split),
+      split="".join(c if c not in "[]%:" else "_" for c in split or ""),
       step=getattr(u.chrono, "prev_step", None),
       **kw,
   )
