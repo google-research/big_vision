@@ -466,7 +466,8 @@ def main(argv):
                            f"[{step - get_steps('log_training')}, {step}]")
 
     # Checkpoint saving
-    keep_ckpt_steps = get_steps("keep_ckpt", None) or total_steps
+    keep_last = total_steps if get_steps("ckpt", None) else None
+    keep_ckpt_steps = get_steps("keep_ckpt", None) or keep_last
     if save_ckpt_path and (
         (keep := u.itstime(step, keep_ckpt_steps, total_steps, first=False))
         or u.itstime(step, get_steps("ckpt", None), total_steps, first=True)
