@@ -19,7 +19,7 @@ from big_vision.pp import registry
 import tensorflow as tf
 
 
-def get_preprocess_fn(pp_pipeline, log_data=True):
+def get_preprocess_fn(pp_pipeline, log_data=True, log_steps=False):
   """Transform an input string into the preprocessing function.
 
   The minilanguage is as follows:
@@ -39,6 +39,7 @@ def get_preprocess_fn(pp_pipeline, log_data=True):
       None, no preprocessing will be executed.
     log_data: Whether to log the data before and after preprocessing. Can also
       be a string to show in the log for debugging, for example dataset name.
+    log_steps: Whether to log the steps of the preprocessing pipeline.
 
   Returns:
     preprocessing function.
@@ -47,24 +48,27 @@ def get_preprocess_fn(pp_pipeline, log_data=True):
     ValueError: if preprocessing function name is unknown
   """
 
-  names, ops = [], []
+  names, ops, spec_strings = [], [], []
   if pp_pipeline:
     for op_spec in pp_pipeline.split("|"):
       if not op_spec: continue  # Skip empty section instead of error.
       try:
         ops.append(registry.Registry.lookup(f"preprocess_ops.{op_spec}")())
         names.append(registry.parse_name(op_spec)[0])
+        spec_strings.append(op_spec)
       except SyntaxError as err:
         raise ValueError(f"Syntax error on: {op_spec}") from err
 
   def _preprocess_fn(data):
     """The preprocessing function that is returned."""
-    nonlocal log_data
+    nonlocal log_data, log_steps
 
     # Apply all the individual steps in sequence.
     if log_data:
       logging.info("Data before pre-processing (%s):\n%s", log_data, data)
-    for name, op in zip(names, ops):
+    for name, op, spec in zip(names, ops, spec_strings):
+      if log_steps:
+        logging.info("Pre-processing step (%s): %s\n%s", name, spec, data)
       with tf.name_scope(name):
         data = op(data)
 

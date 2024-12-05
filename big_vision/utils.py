@@ -35,6 +35,7 @@ import einops
 import flax
 import flax.jax_utils as flax_utils
 import jax
+from jax.experimental import mesh_utils
 from jax.experimental.array_serialization import serialization as array_serial
 import jax.numpy as jnp
 import ml_collections as mlc
@@ -215,7 +216,9 @@ def load_params(ckpt, **kw):
       # Here we're now loading new-style tensorstore checkpoints.
       # We can be a more efficient and load params and `key` only right away.
       regex = f"params/{key}($|/.*)" if key else "params/.*"
-      checkpoint = load_checkpoint_ts(ckpt, regex=regex)
+      assert "regex" not in kw, "For a custom regex, use tsload directly."
+      kw["regex"] = regex
+      checkpoint = load_checkpoint_ts(ckpt, **kw)
       params = checkpoint["params"]
 
   if key is not None:
@@ -525,6 +528,8 @@ class Chrono:
     self.note += f"\nTotal train time:{hms(dt / steps_timed*self.total_steps)}"
     write_note(self.note)
 
+    log_memory(measure)
+
     self.prev_time = now
     self.paused_time = 0
 
@@ -584,6 +589,28 @@ class Chrono:
 
 # Singleton to use from everywhere. https://stackoverflow.com/a/6760726/2366315
 chrono = Chrono()
+
+
+def log_memory(measure):
+  """Log a bunch of memory-related measurements."""
+  try:
+    import psutil
+  except ImportError:
+    psutil = None
+
+  if psutil is not None:
+    # Note that total != available + used, see psutil docs.
+    vmem = psutil.virtual_memory()
+    measure("y/hostmem/total", vmem.total)
+    measure("y/hostmem/available", vmem.available)
+    measure("y/hostmem/used", vmem.used)
+
+  # We show only device 0 and 1 to avoid spam. The reason to show two and not
+  # just one, if multiple are available, is because a frequent mistake is to
+  # create arrays on the default device, which is device 0.
+  for i, d in zip([0, 1], jax.local_devices()):
+    for k, v in (d.memory_stats() or {}).items():
+      measure(f"y/devmem/dev{i}/{k}", v)
 
 
 def _traverse_with_names(tree, with_inner_nodes=False):
@@ -968,7 +995,7 @@ def tsload(path, *, tree=None, shardings=None, regex=None):
   names_to_load = [os.path.join(path, name.replace("/", "~"))
                    for name in names_to_load]
   specs = [array_serial.get_tensorstore_spec(n) for n in names_to_load]
-  arrays = array_serial.run_deserialization(shardings, specs)
+  arrays = array_serial.run_deserialization(shardings, specs, concurrent_gb=64)
   return tree_def.unflatten(arrays)
 
 
@@ -1002,12 +1029,15 @@ def steps(prefix, config, data_size=None, batch_size=None, total_steps=None,
   """
   # Be helpful and make sure only match one of the following suffixes.
   suffixes = {"steps", "examples", "epochs", "percent"}
-  matches = {f"{prefix}_{s}" for s in suffixes if f"{prefix}_{s}" in config
-             and config[f"{prefix}_{s}"] is not None}
+  matches = {
+      f"{prefix}_{s}"
+      for s in suffixes
+      if (x := config.get(f"{prefix}_{s}")) is not None and x >= 0
+  }
   # Note that steps=0 is also a valid value (e.g. to only run evaluators).
   assert len(matches) <= 1, f"Only one of '{matches}' should be defined."
 
-  if f"{prefix}_steps" in config:
+  if f"{prefix}_steps" in matches:
     return config[f"{prefix}_steps"]
 
   def to_integer(x):
@@ -1015,14 +1045,14 @@ def steps(prefix, config, data_size=None, batch_size=None, total_steps=None,
     # asked for 0. E.g. total_epochs=0 vs total_epochs=0.0001
     return max(1, round(x)) if x else 0
 
-  if batch_size and f"{prefix}_examples" in config:
+  if batch_size and f"{prefix}_examples" in matches:
     return to_integer(config[f"{prefix}_examples"] / batch_size)
 
-  if batch_size and data_size and f"{prefix}_epochs" in config:
+  if batch_size and data_size and f"{prefix}_epochs" in matches:
     steps_per_epoch = data_size / batch_size
     return to_integer(config[f"{prefix}_epochs"] * steps_per_epoch)
 
-  if total_steps and f"{prefix}_percent" in config:
+  if total_steps and f"{prefix}_percent" in matches:
     pct = config[f"{prefix}_percent"]
     assert 0.0 <= pct <= 1.0, (  # Be helpful, since it's not obvious.
         f"Percents should lie in [0.0, 1.0], but {prefix}_percent is {pct}")
@@ -1058,10 +1088,11 @@ def create_learning_rate_schedule(
     A function learning_rate(step): float -> {"learning_rate": float}.
   """
 
-  warmup_steps = steps(
-      "warmup", kw, data_size, batch_size, total_steps, default=0)
-  cooldown_steps = steps(
-      "cooldown", kw, data_size, batch_size, total_steps, default=0)
+  def to_steps(name, default=0):
+    return steps(name, kw, data_size, batch_size, total_steps, default=default)
+
+  warmup_steps = to_steps("warmup")
+  cooldown_steps = to_steps("cooldown")
 
   # Early catch hard to backtrack errors due to warmup_steps >= total_steps,
   # but let it run for 0 and 1 steps used to eval and debug runs.
@@ -1090,11 +1121,8 @@ def create_learning_rate_schedule(
     elif decay_type == "rsqrt":
       # See (internal link) for details, especially how to set timescale
       # and shift in order to continue smoothly when changing batch-size.
-      if "timescale_examples" in kw:
-        t = kw["timescale_examples"] / batch_size
-      else:
-        t = kw.get("timescale", 10_000)  # bwd-compat default.
-      shift = kw.get("shift", 0)
+      t = to_steps("timescale", default=kw.get("timescale", 10_000))
+      shift = to_steps("shift", default=kw.get("shift", 0))
       lr = jnp.where(
           warmup_steps <= step,
           lr / jnp.sqrt(1 + (step + shift - warmup_steps) / t),  # In decay
@@ -1194,7 +1222,7 @@ def profile(name, ttl=3 * 365 * 24 * 3600, noop=False):
 
 
 def startstop_prof(sess, step=None, first_step=0,
-                   log_steps=1, surround=20, **kw):
+                   log_steps=1, surround=10, **kw):
   """Runs the profiler for `surround` steps around the next `log_steps`."""
   first_log = first_step + log_steps - (first_step % log_steps)
   # don't start before first!
@@ -1425,3 +1453,26 @@ def jit_cpu(**extra_kwargs):
       return jax.jit(fun, **extra_kwargs, out_shardings=sh)(*args, **kwargs)
     return _wrapped
   return _decorator
+
+
+def create_device_mesh(
+    config_mesh,
+    *,
+    allow_split_physical_axes=False,
+):
+  """Returns a JAX device mesh.
+
+  Args:
+    config_mesh: A list of tuples of (axis_name, axis_size). It is advised to
+      sort the axis in increasing order of network communication intensity.
+    allow_split_physical_axes: Whether to allow splitting physical axes.
+  """
+  devices = jax.devices()
+  mesh_axes, mesh_size = tuple(zip(*config_mesh))
+  # Because jax.utils do not support `-1` shape size.
+  mesh_size = np.array(devices).reshape(mesh_size).shape
+  device_mesh = mesh_utils.create_device_mesh(
+      mesh_size,
+      devices=devices,
+      allow_split_physical_axes=allow_split_physical_axes)
+  return jax.sharding.Mesh(device_mesh, mesh_axes)

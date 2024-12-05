@@ -57,6 +57,9 @@ MAX_DECODE_LEN = flags.DEFINE_integer(
 PREFILL_LEN = flags.DEFINE_integer(
     "prefill_len", default=32, help="Size of prefill (prompt). "
     "Shorter is faster, but too short will cut off your prompt.")
+CKPT_DTYPE = flags.DEFINE_string(
+    "ckpt_dtype", default=None,
+    help="Convert ckpt to dtype before using it (e.g. float16).")
 
 TOKENIZER = "gemma(tokensets=['loc', 'seg'])"
 
@@ -74,6 +77,10 @@ def load_model(ckpt):
 def info(s, *a):
   logging.info("\u001b[33mNOTE\u001b[0m: " + s, *a)
   logging.flush()
+
+
+def cast_params(params):
+  return jax.tree.map(lambda x: x.astype(CKPT_DTYPE.value) if np.issubdtype(x.dtype, np.floating) else x, params)
 
 
 def main(argv):
@@ -95,6 +102,11 @@ def main(argv):
 
   # Ship the params to device(s)
   params = jax.tree.map(lambda x, sh: u.reshard(x, sh), params, params_sharding)
+  if CKPT_DTYPE.value:
+    # Note: if running out of HBM or memory consider convert the checkpoint
+    # ahead of time, or add feature to cast while loading.
+    params = jax.jit(cast_params, donate_argnums=(0,),
+                     out_shardings=params_sharding)(params)
 
   # Mostly go through pp ops to build our batch:
   pp_fn = big_vision.pp.builder.get_preprocess_fn("|".join([

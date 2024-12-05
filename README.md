@@ -93,7 +93,8 @@ codebase:
 - (partial) [PaLI-3 Vision Language Models: Smaller, Faster, Stronger](https://arxiv.org/abs/2310.09199), by Xi Chen, Xiao Wang, Lucas Beyer, Alexander Kolesnikov, Jialin Wu, Paul Voigtlaender, Basil Mustafa, Sebastian Goodman, Ibrahim Alabdulmohsin, Piotr Padlewski, Daniel Salz, Xi Xiong, Daniel Vlasic, Filip Pavetic, Keran Rong, Tianli Yu, Daniel Keysers, Xiaohua Zhai, Radu Soricut.
 - [LocCa](https://arxiv.org/abs/2403.19596), by
   Bo Wan, Michael Tschannen, Yongqin Xian, Filip Pavetic, Ibrahim Alabdulmohsin, Xiao Wang, André Susano Pinto, Andreas Steiner, Lucas Beyer, Xiaohua Zhai.
-- [PaliGemma](https://arxiv.org/abs/2407.07726), by *wow many authors*.\
+- [PaliGemma](https://arxiv.org/abs/2407.07726),
+  [PaliGemma 2](https://arxiv.org/abs/2412.03555), by *wow many authors*.\
 - Resources: [readme](big_vision/configs/proj/paligemma/README.md),
     [model](big_vision/models/proj/paligemma/paligemma.py),
     [transfer configs](big_vision/configs/proj/paligemma/transfers),

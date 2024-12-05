@@ -37,8 +37,8 @@ API = 'jit'
 @partial(jax.jit, static_argnums=0)
 def _run_predict_fn(predict_fn, train_state, batch):
   """Sum per-example metrics weighted by `_mask`."""
-  mask = batch['_mask']
   metrics = predict_fn(train_state, batch)
+  mask = batch['_mask']
   # Sanity check output format of predict_fn.
   assert isinstance(metrics, Mapping), 'predict_fn must return a dict'
   for y in jax.tree.leaves(metrics):

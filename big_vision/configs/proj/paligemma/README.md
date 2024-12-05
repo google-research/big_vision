@@ -8,27 +8,28 @@ the [Gemma language model](https://ai.google.dev/gemma).
 PaliGemma is designed as a versatile model for transfer to a wide range of
 vision-language tasks such as image and short video caption, visual question
 answering, text reading, object detection and object segmentation. Together with
-the pretrained and transfer checkpoints at multiple resolutions, we provide a
-checkpoint transferred to a mixture of tasks that can be used for off-the-shelf
-exploration.
+the pretrained checkpoints (PaliGemma and PaliGemma 2) we also provide transfer
+checkpoints at multiple resolutions and a checkpoint transferred to a mixture of
+tasks that can be used for off-the-shelf exploration (PaliGemma only).
 
 ## Quick Reference
 
 This is the reference repository of the model, you may also want to check out the resources on
 
- - [ArXiv](https://arxiv.org/abs/2407.07726): Technical report.
- - [Kaggle](https://www.kaggle.com/models/google/paligemma):
- All pre-trained / mix checkpoints and model card.
- - [Kaggle-FT](https://www.kaggle.com/models/google/paligemma-ft):
- All fine-tuned checkpoints and model card.
- - [VertexAI Model Garden](https://console.cloud.google.com/vertex-ai/publishers/google/model-garden/363):
- Paligemma models on GCP.
- - [Hugging Face](https://huggingface.co/google/paligemma-3b-pt-224):
- PyTorch port of paligemma models.
- - [Light finetuning colab](https://colab.research.google.com/github/google-research/big_vision/blob/main/big_vision/configs/proj/paligemma/finetune_paligemma.ipynb):
-  Lightweight colab for fine-tuning PaliGemma. It can be run on a single T4 GPU (16GB)
-  available on free Colab.
- - [HuggingFace demo](https://hf.co/spaces/google/paligemma): live demo.
+ - Technical reports on ArXiv: [PaliGemma](https://arxiv.org/abs/2407.07726),
+   [PaliGemma 2](https://arxiv.org/abs/2412.03555)
+ - Pre-trained / mix checkpoints and model card on Kaggle:
+   [PaliGemma](https://www.kaggle.com/models/google/paligemma),
+   [PaliGemma transfers](https://www.kaggle.com/models/google/paligemma-ft),
+   [PaliGemma 2](https://www.kaggle.com/models/google/paligemma-2)
+ - Google Cloud VertexAI Model Garden:
+   [PaliGemma](https://console.cloud.google.com/vertex-ai/publishers/google/model-garden/363)
+ - PyTorch and JAX models on Hugging Face:
+   [PaliGemma](https://huggingface.co/collections/google/paligemma-release-6643a9ffbf57de2ae0448dda),
+   [PaliGemma 2](https://huggingface.co/collections/google/paligemma-2-release-67500e1e1dbfdd4dee27ba48)
+ - Light fine-tuning using `big_vision` on a single (free) T4 GPU:
+   [Colab](https://colab.research.google.com/github/google-research/big_vision/blob/main/big_vision/configs/proj/paligemma/finetune_paligemma.ipynb)
+ - Demo: [HuggingFace PaliGemma space](https://hf.co/spaces/google/paligemma)
 
 ### Citation BibTeX
 
@@ -39,22 +40,31 @@ This is the reference repository of the model, you may also want to check out th
       year={2024},
       journal={arXiv preprint arXiv:2407.07726}
 }
+@article{steiner2024paligemma2,
+      title={{PaliGemma 2: A Family of Versatile VLMs for Transfer}},
+      author={Andreas Steiner and André Susano Pinto and Michael Tschannen and Daniel Keysers and Xiao Wang and Yonatan Bitton and Alexey Gritsenko and Matthias Minderer and Anthony Sherbondy and Shangbang Long and Siyang Qin and Reeve Ingle and Emanuele Bugliarello and Sahar Kazemzadeh and Thomas Mesnard and Ibrahim Alabdulmohsin and Lucas Beyer and Xiaohua Zhai},
+      year={2024},
+      journal={arXiv preprint arXiv:2412.03555}
+}
 ```
 
 ## Model description
 
 ### Overview
 
-PaliGemma-3B is Vision-Language model that was inspired by the PaLI-3 recipe.
-It is built on SigLIP visual encoder (specifically, SigLIP-So400m/14) and the
-Gemma 2B language model. PaliGemma takes as input one or more images,
-which are turned into "soft tokens" by the SigLIP encoder, and input text
-(codenamed the "prefix") that is tokenized by Gemma's tokenizer. The image
-tokens and prefix tokens are concatenated (in this order) and passed to the
-Gemma decoder with full block-attention, which then generates an output text
-(the "suffix") auto-regressively with masked attention.
+PaliGemma is Vision-Language model that was inspired by the PaLI-3 recipe. It is
+built on SigLIP visual encoder (specifically, SigLIP-So400m/14) and the
+Gemma language model. PaliGemma takes as input one or more images, which are
+turned into "soft tokens" by the SigLIP encoder, and input text (codenamed the
+"prefix") that is tokenized by Gemma's tokenizer. The image tokens and prefix
+tokens are concatenated (in this order) and passed to the Gemma decoder with
+full block-attention, which then generates an output text (the "suffix")
+auto-regressively with masked attention.
 
-![PaliGemma model](paligemma.png)
+![PaliGemma model](paligemma2.png)
+
+Note that PaliGemma uses Gemma 2B model, PaliGemma 2 uses Gemma 2 {2B,9B,27B}
+models.
 
 ### Training stages
 
@@ -98,12 +108,8 @@ other codebases.
 ## Checkpoints
 
 The PaliGemma models are released under the same open license as the Gemma
-models, and hence require manual acknowledgement of the license terms on kaggle:
-https://www.kaggle.com/models/google/paligemma. The reference checkpoints are
-available on
-[Kaggle](https://www.kaggle.com/models/google/paligemma),
-[VertexAI Model Garden](https://console.cloud.google.com/vertex-ai/publishers/google/model-garden/363) and
-[Hugging Face](https://huggingface.co/google/paligemma-3b-pt-224).
+models, and hence require manual acknowledgement of the license terms. See
+above [Quick Reference](#quick-reference) for download links.
 
 ### Pretrained checkpoints
 
@@ -130,6 +136,8 @@ should happen in float32 or mixed precision.
 
 ### Mixture checkpoint
 
+(Currently only available for PaliGemma)
+
 This checkpoint is trained on a mixture of all our transfer tasks,
 with a balancing intended to make it "nice to use" out of the box for
 predictions. This model is multilingual and should
@@ -151,6 +159,8 @@ structured `detect {things}` and `segment {things}` prompts as in the base model
   sequence length 512.
 
 ### Transfers results and checkpoints
+
+(DOCCI only available for PaliGemma 2, others only available for PaliGemma)
 
 We provide checkpoints transferred to most of the tasks we evaluated
 transfer on, see the [kaggle page](https://www.kaggle.com/models/google/paligemma).
@@ -244,16 +254,17 @@ Checkpoints can be downloaded from Kaggle. You need to create an account and ack
 export KAGGLE_USERNAME=
 export KAGGLE_KEY=
 
-# See https://www.kaggle.com/models/google/paligemma for a full list of models.
-export MODEL_NAME=paligemma-3b-pt-224
-export CKPT_FILE=paligemma-3b-pt-224.npz
+# See https://www.kaggle.com/models/google/paligemma-2 for a full list of models.
+export MODEL_NAME=paligemma-2
+export CKPT_FILE=paligemma2-3b-pt-224.npz.b16
 
 mkdir ckpts/
 cd ckpts/
 
+# Store as a "vanity name" from models/proj/paligemma/paligemma.py
 curl -L -u $KAGGLE_USERNAME:$KAGGLE_KEY\
-  -o pt_224.npz \
-  https://www.kaggle.com/api/v1/models/google/paligemma/jax/$MODEL_NAME/1/download/$CKPT_FILE
+  -o pt_3b_224.bf16.npz \
+  https://www.kaggle.com/api/v1/models/google/paligemma-2/jax/$MODEL_NAME/1/download/$CKPT_FILE
 ```
 
 As an example, we provide the `forkme.py` config that is based on the easily-adjustable jsonl data source:
@@ -267,4 +278,6 @@ If you want to use TFDS-based data, check out other transfer configs. Remember t
 
 ## Model Development Contributions
 
-See the [technical report](https://arxiv.org/abs/2407.07726)'s Appendix.
+See the Appendices of technical reports:
+[PaliGemma](https://arxiv.org/abs/2407.07726),
+[PaliGemma 2](https://arxiv.org/abs/2412.03555).

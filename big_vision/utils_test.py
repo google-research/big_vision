@@ -52,8 +52,8 @@ class PadShardUnpadTest(chex.TestCase, tf.test.TestCase):
     def add(a, b):
       return a + b
 
-    x = np.arange(bs, dtype=dtype)
-    y = add(x, 10*x)
+    x = jnp.arange(bs, dtype=dtype)
+    y = add(x, 10 * x)
     chex.assert_type(y.dtype, x.dtype)
     np.testing.assert_allclose(np.float64(y), np.float64(x + 10*x))
 
@@ -68,8 +68,8 @@ class PadShardUnpadTest(chex.TestCase, tf.test.TestCase):
     chex.clear_trace_counter()
 
     for bs in self.BATCH_SIZES:
-      x = np.arange(bs, dtype=dtype)
-      y = add(x, 10*x, min_device_batch=9)  # pylint: disable=unexpected-keyword-arg
+      x = jnp.arange(bs, dtype=dtype)
+      y = add(x, 10 * x, min_device_batch=9)  # pylint: disable=unexpected-keyword-arg
       chex.assert_type(y.dtype, x.dtype)
       np.testing.assert_allclose(np.float64(y), np.float64(x + 10*x))
 
@@ -79,8 +79,8 @@ class PadShardUnpadTest(chex.TestCase, tf.test.TestCase):
     def add(a, b):
       return a + b
 
-    x = np.arange(bs, dtype=dtype)
-    y = add(x, 10)
+    x = jnp.arange(bs, dtype=dtype)
+    y = add(x, dtype(10))
     chex.assert_type(y.dtype, x.dtype)
     np.testing.assert_allclose(np.float64(y), np.float64(x + 10))
 
@@ -92,8 +92,8 @@ class PadShardUnpadTest(chex.TestCase, tf.test.TestCase):
     def add(params, a, *, b):
       return params * a + b
 
-    x = np.arange(bs, dtype=dtype)
-    y = add(5, x, b=10)
+    x = jnp.arange(bs, dtype=dtype)
+    y = add(dtype(5), x, b=dtype(10))
     chex.assert_type(y.dtype, x.dtype)
     np.testing.assert_allclose(np.float64(y), np.float64(5 * x + 10))
 
@@ -232,6 +232,9 @@ class StepConversionTest(parameterized.TestCase, tf.test.TestCase):
       ('nice_epochs', 1000, 100, None, dict(foo_epochs=3), 30),
       ('nice_examples', None, 100, None, dict(foo_examples=300), 3),
       ('nice_percent', None, None, 10, dict(foo_percent=0.30), 3),
+      ('ignore_neg', 1000, 100, 10, dict(foo_steps=-1, foo_epochs=-1,
+                                         foo_examples=-1, foo_percent=0.30), 3),
+      ('zero_steps', None, None, 10, dict(foo_percent=0.0), 0),
       ('offbyone_steps', 1001, None, None, dict(foo_steps=3), 3),
       ('offbyone_epochs', 1001, 100, None, dict(foo_epochs=3), 30),
       ('offbyone_examples', None, 101, None, dict(foo_examples=300), 3),

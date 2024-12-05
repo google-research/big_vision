@@ -68,7 +68,7 @@ def add_eval(c, res, text_len=32, **kw):
         outfile=f'{{workdir}}/aokvqa_da_{name}.json',
         data={**training_data(res, True, text_len).data, 'split': split},
         log_percent=freq, skip_first=freq == 1, tokenizer=TOKENIZER, pp_fn=pp)
-    c.evals[f'aokvqa/{name}'].update(kw)
+    c.evals[f'aokvqa_da/{name}'].update(kw)
 
 
 def add_eval_pplx(c, res, text_len=32):

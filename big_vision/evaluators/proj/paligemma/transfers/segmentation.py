@@ -123,9 +123,11 @@ class Evaluator:
           iou = 0.0
           invalid += 1
         else:
-          mi = np.asarray(PIL.Image.fromarray(m64).resize(
-              [x2 - x1, y2 - y1], resample=PIL.Image.BILINEAR  # pytype: disable=module-attr
-          ))  # Predicted mask in box-sized image.
+          mi = np.asarray(
+              PIL.Image.fromarray(m64).resize(  # pytype: disable=wrong-arg-types  # pillow-102-upgrade
+                  [x2 - x1, y2 - y1], resample=PIL.Image.BILINEAR  # pytype: disable=module-attr
+              )
+          )  # Predicted mask in box-sized image.
           mi = mi > 0.0  # Mask decoder output in [-1.0 ... 1.0]
           iarea = (gtm[y1:y2, x1:x2] & mi).sum()  # Intersection pixels.
           iou = iarea / (gt_area + mi.sum() - iarea)

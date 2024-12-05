@@ -29,6 +29,12 @@ Example Colab using the models via the PaliGemma decoding logic:
 
 Doc locating the variable initializers in the original code and validating them:
 (internal link)
+
+This implementation does *not* currently support the local sliding attention
+pattern used in the v2 models. But since we mostly use sequences <4096 tokens,
+this shouldn't make any difference. Since RoPE embedding is used throughout,
+it's unclear if there is any practical difference (other than wasting some
+memory).
 """
 
 
@@ -57,7 +63,7 @@ def get_config(variant):
             num_kv_heads=1,
             head_dim=256,
             norm_eps=1e-6,
-            vocab_size=256_128,
+            vocab_size=256_000,
             scan=True,
             remat_policy="nothing_saveable",
         )
@@ -73,7 +79,65 @@ def get_config(variant):
             num_kv_heads=16,
             head_dim=256,
             norm_eps=1e-6,
-            vocab_size=256_128,
+            vocab_size=256_000,
+            scan=True,
+            remat_policy="nothing_saveable",
+        )
+    )
+  if variant == "gemma2_2b":
+    return ml_collections.ConfigDict(
+        dict(
+            variant=variant,
+            width=2304,
+            depth=26,
+            mlp_dim=9_216,
+            num_heads=8,
+            num_kv_heads=4,
+            head_dim=256,
+            norm_eps=1e-6,
+            vocab_size=256_000,
+            final_logits_softcap=30.0,
+            attn_logits_softcap=50.0,
+            post_norms=True,
+            scan=True,
+            remat_policy="nothing_saveable",
+        )
+    )
+  if variant == "gemma2_9b":
+    return ml_collections.ConfigDict(
+        dict(
+            variant=variant,
+            width=3584,
+            depth=42,
+            mlp_dim=14_336,
+            num_heads=16,
+            num_kv_heads=8,
+            head_dim=256,
+            norm_eps=1e-6,
+            vocab_size=256_000,
+            final_logits_softcap=30.0,
+            attn_logits_softcap=50.0,
+            post_norms=True,
+            scan=True,
+            remat_policy="nothing_saveable",
+        )
+    )
+  if variant == "gemma2_27b":
+    return ml_collections.ConfigDict(
+        dict(
+            variant=variant,
+            width=4608,
+            depth=46,
+            mlp_dim=36_864,
+            num_heads=32,
+            num_kv_heads=16,
+            head_dim=128,
+            norm_eps=1e-6,
+            vocab_size=256_000,
+            query_pre_attn_norm="rsqrt_emb_per_head",
+            final_logits_softcap=30.0,
+            attn_logits_softcap=50.0,
+            post_norms=True,
             scan=True,
             remat_policy="nothing_saveable",
         )
@@ -190,6 +254,9 @@ class Attention(nn.Module):
   features: int
   head_dim: int
 
+  query_pre_attn_norm: str
+  attn_logits_softcap: float | None
+
   cache_dtype: str | None = None
 
   def setup(self):
@@ -200,7 +267,7 @@ class Attention(nn.Module):
               in_axis=(2,), out_axis=(0, 1, 3), batch_axis=()),
       )
     else:
-      # MQA
+      # MQA / GQA
       self.q_einsum = Einsum(
           shape=(self.num_heads, self.features, self.head_dim),
           w_init=trunc_norm_init(in_axis=(1,), out_axis=(0, 2), batch_axis=()),
@@ -224,7 +291,14 @@ class Attention(nn.Module):
       k, v = self.kv_einsum("BSD,2KDH->2BSKH", x)
 
     q = _apply_rope(q, positions=positions)
-    q *= self.head_dim**-0.5
+    if self.query_pre_attn_norm == "rsqrt_head_dim":
+      q *= self.head_dim**-0.5
+    elif self.query_pre_attn_norm == "rsqrt_emb_per_head":
+      q *= (self.features // self.num_heads)**-0.5
+    else:
+      raise ValueError(
+          f"Unknown query_pre_attn_norm: {self.query_pre_attn_norm}"
+      )
 
     k = _apply_rope(k, positions=positions)
     if decode:
@@ -235,6 +309,10 @@ class Attention(nn.Module):
     q = einops.rearrange(q, "B T (K G) H -> B T K G H", K=self.num_kv_heads)
     logits = jnp.einsum("BTKGH,BSKH->BKGTS", q, k)
     logits = logits.astype(jnp.float32)
+
+    if self.attn_logits_softcap:
+      logits = jnp.tanh(logits / self.attn_logits_softcap)
+      logits = logits * self.attn_logits_softcap
 
     if attn_mask.shape != (q.shape[0], 1, q.shape[1], k.shape[1]):
       raise ValueError(
@@ -293,6 +371,10 @@ class Block(nn.Module):
   head_dim: int
   hidden_dim: int
 
+  query_pre_attn_norm: str
+  attn_logits_softcap: float | None
+  post_norms: bool
+
   dropout: float = 0.0
   dropout_bdims: tuple[int, ...] = ()
   cache_dtype: str | None = None
@@ -305,6 +387,8 @@ class Block(nn.Module):
         features=self.embed_dim,
         head_dim=self.head_dim,
         cache_dtype=self.cache_dtype,
+        query_pre_attn_norm=self.query_pre_attn_norm,
+        attn_logits_softcap=self.attn_logits_softcap,
     )
     self.pre_ffw_norm = RMSNorm()
     self.mlp = FeedForward(features=self.embed_dim, hidden_dim=self.hidden_dim)
@@ -312,6 +396,9 @@ class Block(nn.Module):
       self.drop = nn.Dropout(self.dropout, self.dropout_bdims)
     else:
       self.drop = lambda x, _: x
+    if self.post_norms:
+      self.post_attention_norm = RMSNorm()
+      self.post_ffw_norm = RMSNorm()
 
   def __call__(self, x, unused_scan_arg, positions, attn_mask,
                decode, deterministic=True):
@@ -319,12 +406,16 @@ class Block(nn.Module):
     inputs_normalized = self.pre_attention_norm(x)
     attn_output = self.attn(inputs_normalized, positions, attn_mask,
                             decode, deterministic)
+    if self.post_norms:
+      attn_output = self.post_attention_norm(attn_output)
     attn_output = self.drop(attn_output, deterministic)
     attn_output += x
     residual = attn_output
     attn_output = self.pre_ffw_norm(attn_output)
     outputs = self.mlp(attn_output)
     outputs = self.drop(outputs, deterministic)
+    if self.post_norms:
+      outputs = self.post_ffw_norm(outputs)
     outputs = residual + outputs
     return outputs, unused_scan_arg
 
@@ -342,6 +433,11 @@ class Model(nn.Module):
   head_dim: int
   norm_eps: float
   vocab_size: int
+
+  query_pre_attn_norm: str = "rsqrt_head_dim"
+  final_logits_softcap: float = 0.0
+  attn_logits_softcap: float = 0.0
+  post_norms: bool = False
 
   dropout: float = 0.0
   dropout_bdims: tuple[int, ...] = ()  # Every float is dropped independently.
@@ -439,8 +535,11 @@ class Model(nn.Module):
         dropout=self.dropout,
         dropout_bdims=self.dropout_bdims,
         cache_dtype=self.cache_dtype,
+        query_pre_attn_norm=self.query_pre_attn_norm,
+        attn_logits_softcap=self.attn_logits_softcap,
+        post_norms=self.post_norms,
     )
-    layers = self.scope.push("layers")
+    layers = self.scope.push("layers")  # pytype: disable=attribute-error
     if self.scan:
       blocks = [nn.scan(
           block_cls,
@@ -472,6 +571,9 @@ class Model(nn.Module):
     out["pre_logits"] = x
 
     x = embedder.decode(x)
+    out["logits_pre_norm"] = x
+    if self.final_logits_softcap:
+      x = jnp.tanh(x / self.final_logits_softcap) * self.final_logits_softcap
     out["logits"] = x
 
     return x, out
@@ -499,8 +601,24 @@ def _load_orbax(path):
 def _del_pad_rows(params):
   """Some checkpoints have 128 unused padding tokens."""
   emb = params["embedder"]["input_embedding"]
-  assert emb.shape[0] == 256_128
-  params["embedder"]["input_embedding"] = np.asarray(emb)[:256_000]
+  if emb.shape[0] == 256_128:
+    params["embedder"]["input_embedding"] = jax.device_get(emb)[:256_000]
+  assert params["embedder"]["input_embedding"].shape[0] == 256_000
+
+
+def _maybe_transpose_gating_einsum(params):
+  """The `transpose_gating_einsum` case in gemma/modules.py."""
+  mlp = params["layers"]["mlp"]
+  *_, d1, d2 = mlp["gating_einsum"].shape
+  if d1 > d2:
+    *ns, n1, n2 = range(len(mlp["gating_einsum"].shape))
+    mlp["gating_einsum"] = mlp["gating_einsum"].transpose(*ns, n2, n1)
+
+
+def _load_like_bv(params):
+  params = jax.tree.map(lambda x: x, params)
+  _del_pad_rows(params)
+  _maybe_transpose_gating_einsum(params)
   return params
 
 
@@ -510,9 +628,9 @@ def load(init_params, init_file, model_cfg=None, dont_load=()):
   variant = model_cfg.get("variant", "gemma_2b")
   init_variant = f"{init_file} {variant}"
   if init_variant in _ORBAX_INITS:
-    params = _del_pad_rows(_load_orbax(_ORBAX_INITS[init_variant]))
+    params = _load_like_bv(_load_orbax(_ORBAX_INITS[init_variant]))
   elif init_variant in _BV_INITS:
-    params = _del_pad_rows(u.load_params(_BV_INITS[init_variant]))
+    params = _load_like_bv(u.load_params(_BV_INITS[init_variant]))
   else:
     params = u.load_params(init_file)
 

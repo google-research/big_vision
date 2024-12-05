@@ -150,7 +150,7 @@ def get_config(arg=None):
         pp_fn=pp_eval.format(lbl='label'),
         loss_name=config.loss,
         log_steps=2500,  # Very fast O(seconds) so it's fine to run it often.
-        cache='final' if arg.runlocal else 'none',
+        cache='final_data' if arg.runlocal else 'none',
     )
   config.evals = {}
   config.evals.train = get_eval('train[:2%]')

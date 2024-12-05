@@ -15,7 +15,6 @@
 """pp ops."""
 
 import functools
-import string
 
 from big_vision.pp import ops_text
 from big_vision.pp import utils
@@ -100,6 +99,7 @@ def get_tokenize(model, length=None, *, bos='no', eos='no',
   if text is not None:
     assert inkey is None, 'Either inkey or text, not both.'
     tokens = tokenize_constant(model, text, bos=bos, eos=eos, length=length)
+    tokens = tf.cast(tokens, tf.int32)  # Same dtype as in-graph tokenizer.
     def _pp_tokenize_text(data):
       data[outkey_] = tokens
       return data
@@ -113,7 +113,7 @@ def get_tokenize(model, length=None, *, bos='no', eos='no',
 
     toks = tokenizer.to_int_tf_op(
         data[inkey_], bos=bos == 'yes', eos=eos in ('yes', 'sticky'))
-
+    toks = tf.ensure_shape(toks, [None])
     tolen = get_tolen(
         length, sticky_end=eos == 'sticky',
         pad_value=bv_tok.get_tokenizer(model).pad_token,
@@ -130,43 +130,21 @@ def get_tokenize(model, length=None, *, bos='no', eos='no',
 def get_masked_concat(keys, outkey='text', **masks):
   assert all(len(keys) == len(m) for m in masks.values()), (keys, masks)
   def _masked_concat(data):
-    data[outkey] = tf.concat([data[k] for k in keys], axis=0)
+    # Refer to original inputs to support using same key as input/output.
+    inputs = dict(**data)
+    data[outkey] = tf.concat([inputs[k] for k in keys], axis=0)
     for mask_name, mask_vals in masks.items():
-      m = [tf.fill(tf.shape(data[k]), v) for k, v in zip(keys, mask_vals)]
+      m = [tf.fill(tf.shape(inputs[k]), v) for k, v in zip(keys, mask_vals)]
       data[mask_name] = tf.concat(m, axis=0)
     return data
   return _masked_concat
 
 
-@Registry.register('preprocess_ops.strfmt')
-def get_strfmt(template, outkey='text'):
-  """Formats a string template with content form the data dict."""
-
-  def _template(data):
-    outputs = []
-    parts = string.Formatter().parse(template)
-    for (literal_text, field_name, format_spec, conversion) in parts:
-      # For now, we keep it simple and don't support fancy format specs.
-      # But we can add support to that via py_func as soon as we need it.
-      assert not format_spec and not conversion
-      outputs.append(tf.constant(literal_text))
-      if field_name:
-        value = data[field_name]
-        # Convert any non-strings (numbers, vectors) to a string.
-        if tf.convert_to_tensor(value).dtype != tf.string:
-          value = tf.strings.format('{}', value, summarize=-1)
-        outputs.append(value)
-    data[outkey] = tf.strings.join(outputs)
-    return data
-
-  return _template
-
-
 @Registry.register('preprocess_ops.strjoin')
 @utils.InKeyOutKey()
-def get_strjoin(glue):
+def get_strjoin(glue, axis=None):
   def _strjoin(x):
-    return tf.strings.reduce_join(x, separator=glue)
+    return tf.strings.reduce_join(x, axis=axis, separator=glue)
   return _strjoin
 
 

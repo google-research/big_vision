@@ -21,6 +21,7 @@ import jax.numpy as jnp
 
 
 def _get_config(model):
+  """Returns modified config from `gemma.get_config()`."""
   config = gemma.get_config(model.variant)
   config.scan = model.scan
   config.remat_policy = model.remat_policy
@@ -29,6 +30,10 @@ def _get_config(model):
   config.dropout = model.dropout
   config.dropout_bdims = model.dropout_bdims
   config.cache_dtype = model.cache_dtype
+  if model.final_logits_softcap is not None:
+    config.final_logits_softcap = model.final_logits_softcap
+  if model.attn_logits_softcap is not None:
+    config.attn_logits_softcap = model.attn_logits_softcap
   return config
 
 
@@ -56,6 +61,8 @@ class Model(nn.Module):
   dropout: float = 0.0
   dropout_bdims: tuple[int, ...] = ()  # Every float is dropped independently.
   cache_dtype: str | None = "bfloat16"  # bfloat16 to save memory and transfers.
+  final_logits_softcap: float | None = None
+  attn_logits_softcap: float | None = None
 
   def setup(self):
     # The parent+name avoids an unnecessary nesting in params pytree.

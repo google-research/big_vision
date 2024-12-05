@@ -33,7 +33,7 @@ def combine_and_keep_train(text_len, before=(), sep='\n'):
       tok(key='suffix', eos='yes'),
       tok(key='septok', text=sep),
       # If masks confuse you, see (internal link)
-      'masked_concat(["prefix", "septok", "suffix"], mask_ar=[0, 0, 1], mask_loss=[0, 0, 1])',  # pylint: disable=line-too-long
+      'masked_concat(["prefix", "septok", "suffix"], outkey="text", mask_ar=[0, 0, 1], mask_loss=[0, 0, 1])',  # pylint: disable=line-too-long
       # For training, we +1 since the trainer removes EOS.
       f'tolen({text_len+1}, pad_value=0, key="text")',  # Value doesn't matter.
       f'tolen({text_len+1}, pad_value=1, key="mask_ar")',
@@ -55,7 +55,7 @@ def combine_and_keep_eval(text_len, keep=tuple(), before=(), sep='\n'):
       'setdefault("suffix", "")',
       tok(key='suffix', eos='no'),
       # If masks confuse you, see (internal link)
-      'masked_concat(["prefix", "septok", "suffix"], mask_ar=[0, 0, 1], mask_input=[1, 1, 1])',  # pylint: disable=line-too-long
+      'masked_concat(["prefix", "septok", "suffix"], outkey="text", mask_ar=[0, 0, 1], mask_input=[1, 1, 1])',  # pylint: disable=line-too-long
       f'tolen({text_len}, pad_value=0, key="text")',  # value doesn't matter.
       f'tolen({text_len}, pad_value=1, key="mask_ar")',
       f'tolen({text_len}, pad_value=0, key="mask_input")',

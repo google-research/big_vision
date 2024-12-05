@@ -18,7 +18,7 @@ import ml_collections as mlc
 
 
 def get_fewshot_lsr(target_resolution=224, resize_resolution=256,
-                    runlocal=False, **kw):
+                    runlocal=False, pp=None, **kw):
   """Returns a standard-ish fewshot eval configuration."""
   kw.setdefault('representation_layer', 'pre_logits')
   kw.setdefault('shots', (1, 5, 10, 25))
@@ -45,12 +45,16 @@ def get_fewshot_lsr(target_resolution=224, resize_resolution=256,
   } if not runlocal else {
       'pets': ('oxford_iiit_pet', 'train', 'test'),
   }
-  config.pp_train = (f'decode|resize({resize_resolution})|'
-                     f'central_crop({target_resolution})|'
-                     f'value_range(-1,1)|keep("image", "label")')
-  config.pp_eval = (f'decode|resize({resize_resolution})|'
-                    f'central_crop({target_resolution})|'
-                    f'value_range(-1,1)|keep("image", "label")')
+
+  pp = pp or '|'.join([
+      'decode',
+      f'resize({resize_resolution})',
+      f'central_crop({target_resolution})',
+      'value_range(-1,1)'
+  ])
+  pp += '|keep("image", "label")'
+  config.pp_train = pp
+  config.pp_eval = pp
   config.display_first = [('imagenet', 10)] if not runlocal else [('pets', 10)]
 
   return config

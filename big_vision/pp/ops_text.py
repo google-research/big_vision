@@ -22,6 +22,7 @@ A commonly used key for the tokenized output is "labels".
 """
 import functools
 import importlib
+import string
 
 from absl import logging
 from big_vision.datasets.imagenet import class_names as imagenet_class_names
@@ -224,6 +225,17 @@ def get_pp_clip_i1k_label_names():
   return _pp_imagenet_labels
 
 
+@Registry.register("preprocess_ops.i21k_label_names")
+@utils.InKeyOutKey(indefault="label", outdefault="labels")
+def get_pp_i21k_label_names():
+  """Converts i21k label ids to strings."""
+
+  def _pp_imagenet_labels(label):
+    return tf.gather(imagenet_class_names.IMAGENET21k_CLASS_NAMES, label)
+
+  return _pp_imagenet_labels
+
+
 @Registry.register("preprocess_ops.lower")
 @utils.InKeyOutKey(indefault="text", outdefault="text")
 def get_lower():
@@ -233,6 +245,30 @@ def get_lower():
     return tf.strings.lower(text)
 
   return _pp_lower
+
+
+@Registry.register("preprocess_ops.strfmt")
+def get_strfmt(template, outkey="text"):
+  """Formats a string template with content form the data dict."""
+
+  def _template(data):
+    outputs = []
+    parts = string.Formatter().parse(template)
+    for (literal_text, field_name, format_spec, conversion) in parts:
+      # For now, we keep it simple and don't support fancy format specs.
+      # But we can add support to that via py_func as soon as we need it.
+      assert not format_spec and not conversion
+      outputs.append(tf.constant(literal_text))
+      if field_name:
+        value = data[field_name]
+        # Convert any non-strings (numbers, vectors) to a string.
+        if tf.convert_to_tensor(value).dtype != tf.string:
+          value = tf.strings.format("{}", value, summarize=-1)
+        outputs.append(value)
+    data[outkey] = tf.strings.join(outputs)
+    return data
+
+  return _template
 
 
 def _add_pieces(model_bytes, extra_pieces):
@@ -355,8 +391,8 @@ class SentencepieceTokenizer(bv_tok.Tokenizer):
     text = tf.convert_to_tensor(text)
     if text.ndim == 0:
       def fn(txt):
-        string = txt.numpy().decode()
-        return tf.constant(self.to_int(string, bos=bos, eos=eos), tf.int32)
+        s = txt.numpy().decode()
+        return tf.constant(self.to_int(s, bos=bos, eos=eos), tf.int32)
       return tf.py_function(fn, [text], tf.int32)
     else:
       def fn(txt):

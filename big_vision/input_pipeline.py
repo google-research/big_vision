@@ -63,7 +63,11 @@ def make_for_train(
 
   data = data.ignore_errors(log_warning=True) if skip_errors else data
 
-  data = sequence_packing.pack_dataset(data, pack) if pack else data
+  if pack:
+    data = sequence_packing.pack_dataset(
+        data,
+        batch_size // jax.process_count() if batch_size else None,
+        pack.to_dict())
 
   # Drop remainder makes shape fully static, so we can later use it if needed.
   if batch_size:
@@ -99,7 +103,8 @@ def training(input_config):
   if isinstance(input_config.data.get("name"), str):
     train_data = ds_core.get(**input_config.data)
     train_ds = make_for_train(
-        data=train_data.get_tfdata(ordered=False),
+        data=train_data.get_tfdata(ordered=False,
+                                   **input_config.get("tfdata", {})),
         batch_size=batch_size,
         preprocess_fn=pp_builder.get_preprocess_fn(input_config.get("pp")),
         prefetch=input_config.get("prefetch", 2),  # Default 2 for bwd compat.
@@ -119,7 +124,7 @@ def training(input_config):
     dataset = input_config[name]
     train_data = ds_core.get(**dataset.data)
     dataset = make_for_train(
-        data=train_data.get_tfdata(ordered=False),
+        data=train_data.get_tfdata(ordered=False, **dataset.get("tfdata", {})),
         # Don't batch the data just yet, it will be done after
         # mixing the different datasets below.
         batch_size=None,
@@ -132,7 +137,9 @@ def training(input_config):
     return name, dataset, weight, train_data.total_examples
 
   names, datasets, weights, totals = [], [], [], []
-  pool = multiprocessing.pool.ThreadPool(len(input_config.data))
+  pool = multiprocessing.pool.ThreadPool(
+      input_config.get("thread_pool_size", len(input_config.data))
+  )
   for name, dataset, weight, total in pool.map(
       # Skip weight=0 datasets as a convenient optimization in sweeps.
       _make, ((name, w) for name, w in input_config.data.items() if w)):
@@ -146,14 +153,18 @@ def training(input_config):
 
   logging.info(
       "NOTE: Total dataset mix size: %d\nContributions:\n%s", sum(totals),
-      "\n".join(f"{ds}: {n} ({w * 100:.1g}%)"
+      "\n".join(f"{ds}: {n} ({w * 100:.2g}%)"
                 for ds, n, w in zip(names, totals, weights))
   )
 
   train_ds = tf.data.Dataset.sample_from_datasets(
       datasets, weights, stop_on_empty_dataset=True)
   if input_config.get("pack"):
-    train_ds = sequence_packing.pack_dataset(train_ds, input_config.get("pack"))
+    train_ds = sequence_packing.pack_dataset(
+        train_ds,
+        input_config["batch_size"] // jax.process_count(),
+        input_config.pack.to_dict())
+
   train_ds = train_ds.batch(
       input_config["batch_size"] // jax.process_count(), drop_remainder=True)
   if (pf := input_config.get("prefetch", 2)):

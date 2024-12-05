@@ -69,6 +69,11 @@ class PpOpsTest(tf.test.TestCase, parameterized.TestCase):
     labels = op({"label": tf.constant([0, 1])})["labels"].numpy().tolist()
     self.assertAllEqual(labels, ["tench", "goldfish"])
 
+  def test_get_pp_i21k_label_names(self):
+    op = pp.get_pp_i21k_label_names()
+    labels = op({"label": tf.constant([0, 1])})["labels"].numpy().tolist()
+    self.assertAllEqual(labels, ["organism", "benthos"])
+
   @parameterized.parameters((b"Hello world ScAlAr!", b"hello world scalar!"),
                             (["Decoded Array!"], ["decoded array!"]),
                             ([b"aA", "bB"], [b"aa", "bb"]))
@@ -145,6 +150,42 @@ class PpOpsTest(tf.test.TestCase, parameterized.TestCase):
     self.assertEqual(
         tok.to_str([1, 80, 180, 60, 2], stop_at_eos=False), "<s> blah</s>"
     )
+
+  def test_strfmt(self):
+    data = {
+        "int": tf.constant(42, tf.uint8),
+        "float": tf.constant(3.14, tf.float32),
+        "vec": tf.range(3),
+        "empty_str": tf.constant(""),
+        "regex_problem1": tf.constant(r"no \replace pattern"),
+        "regex_problem2": tf.constant(r"yes \1 pattern"),
+    }
+    for out in self.tfrun(pp.get_strfmt("Nothing"), data):
+      self.assertEqual(out["text"], b"Nothing")
+    for out in self.tfrun(pp.get_strfmt("{int}"), data):
+      self.assertEqual(out["text"], b"42")
+    for out in self.tfrun(pp.get_strfmt("A{int}"), data):
+      self.assertEqual(out["text"], b"A42")
+    for out in self.tfrun(pp.get_strfmt("{int}A"), data):
+      self.assertEqual(out["text"], b"42A")
+    for out in self.tfrun(pp.get_strfmt("{int}{int}"), data):
+      self.assertEqual(out["text"], b"4242")
+    for out in self.tfrun(pp.get_strfmt("A{int}A{int}A"), data):
+      self.assertEqual(out["text"], b"A42A42A")
+    for out in self.tfrun(pp.get_strfmt("A{float}A"), data):
+      self.assertEqual(out["text"], b"A3.14A")
+    for out in self.tfrun(pp.get_strfmt("A{float}A{int}"), data):
+      self.assertEqual(out["text"], b"A3.14A42")
+    for out in self.tfrun(pp.get_strfmt("A{vec}A"), data):
+      self.assertEqual(out["text"], b"A[0 1 2]A")
+    for out in self.tfrun(pp.get_strfmt("A{empty_str}A"), data):
+      self.assertEqual(out["text"], b"AA")
+    for out in self.tfrun(pp.get_strfmt("{empty_str}"), data):
+      self.assertEqual(out["text"], b"")
+    for out in self.tfrun(pp.get_strfmt("A{regex_problem1}A"), data):
+      self.assertEqual(out["text"], br"Ano \replace patternA")
+    for out in self.tfrun(pp.get_strfmt("A{regex_problem2}A"), data):
+      self.assertEqual(out["text"], br"Ayes \1 patternA")
 
 
 @Registry.register("tokensets.sp_extra_tokens")
