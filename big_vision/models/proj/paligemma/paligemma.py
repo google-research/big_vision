@@ -245,6 +245,8 @@ GEMMA_DIR = os.environ.get("BV_GEMMA_DIR", "PLEASE_SET_BV_GEMMA_DIR")
 VANITY_NAMES = {
     # Because checkpoints are behind an ACK-wall, the user has to download them
     # to some folder (or bucket), take that from an environment variable.
+    # PaliGemma (https://arxiv.org/abs/2407.07726)
+    # (note that report shows bf16 is practically as good as f32)
     "pt_224": os.path.join(GEMMA_DIR, "pt_224.npz"),
     "pt_224.bf16": os.path.join(GEMMA_DIR, "pt_224.bf16.npz"),
     "pt_224.f16": os.path.join(GEMMA_DIR, "pt_224.f16.npz"),
@@ -254,6 +256,16 @@ VANITY_NAMES = {
     "pt_896": os.path.join(GEMMA_DIR, "pt_896.npz"),
     "pt_896.bf16": os.path.join(GEMMA_DIR, "pt_896.bf16.npz"),
     "pt_896.f16": os.path.join(GEMMA_DIR, "pt_896.f16.npz"),
+    # PaliGemma 2 (https://arxiv.org/abs/2412.03555)
+    "pt_3b_224": os.path.join(GEMMA_DIR, "pt_3b_224.bf16.npz"),
+    "pt_3b_448": os.path.join(GEMMA_DIR, "pt_3b_448.bf16.npz"),
+    "pt_3b_896": os.path.join(GEMMA_DIR, "pt_3b_896.bf16.npz"),
+    "pt_10b_224": os.path.join(GEMMA_DIR, "pt_10b_224.bf16.npz"),
+    "pt_10b_448": os.path.join(GEMMA_DIR, "pt_10b_448.bf16.npz"),
+    "pt_10b_896": os.path.join(GEMMA_DIR, "pt_10b_896.bf16.npz"),
+    "pt_28b_224": os.path.join(GEMMA_DIR, "pt_28b_224.bf16.npz"),
+    "pt_28b_448": os.path.join(GEMMA_DIR, "pt_28b_448.bf16.npz"),
+    "pt_28b_896": os.path.join(GEMMA_DIR, "pt_28b_896.bf16.npz"),
 }
 # pylint: enable=line-too-long
 

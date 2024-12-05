@@ -15,4 +15,5 @@ tensorflow-cpu
 tfds-nightly
 tensorflow-text
 tensorflow-gan
+psutil
 pycocoevalcap

@@ -319,6 +319,12 @@ def get_choice(n="single", key=None, fewer_ok=False, inkey=None, outkey=None):
   min_n = n[0] if is_varlen else 1 if n == "single" else n
 
   def _choice(data):
+    # Catch a hard to identify/understand user error:
+    assert data[inkeys[0]].ndim > 0, (
+        f"You're calling `choice_no_replacement` on {inkeys}, a scalar."
+        " That's probably a mistake ; double-check and then just don't."
+    )
+
     nitems = tf.shape(data[inkeys[0]])[0]
 
     # Sanity check that all keys have same leading dimension, and that is at
@@ -418,6 +424,12 @@ def get_choice_no_replacement(key=None, inkey=None, outkey=None):
       [2], minval=tf.int32.min, maxval=tf.int32.max, dtype=tf.int32)
 
   def _choice(data):
+    # Catch a hard to identify/understand user error:
+    assert data[inkeys[0]].ndim > 0, (
+        f"You're calling `choice` on {inkeys}, a scalar."
+        " That's probably a mistake ; double-check and then just don't."
+    )
+
     nitems = tf.shape(data[inkeys[0]])[0]
 
     # Sanity check that all keys have same leading dimension.

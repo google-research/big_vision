@@ -67,10 +67,10 @@ def _get_builder(dataset, data_dir):
 
 # Cache as it may well take 1-2min on large datasets, and we may use the same
 # multiple times (eg various evaluators).
-def _get_dataset(builder, skip_decode, **kw):
+def _get_dataset(builder, skip_decode, shuffle_files, split=None, **rckw):
   """Returns a tf.data to be used."""
-  rckw = {k: kw.pop(k) for k in ("shuffle_seed",) if k in kw}
   ds = builder.as_dataset(
+      split=split, shuffle_files=shuffle_files,
       read_config=tfds.ReadConfig(
           skip_prefetch=True,  # We prefetch after pipeline.
           try_autocache=False,  # We control this, esp. for few-shot.
@@ -80,8 +80,7 @@ def _get_dataset(builder, skip_decode, **kw):
       decoders={
           f: tfds.decode.SkipDecoding()
           for f in skip_decode if f in builder.info.features
-      },
-      **kw)
+      })
 
   def _hash_tfds_id(example):
     id_ = tf.strings.to_hash_bucket_strong(

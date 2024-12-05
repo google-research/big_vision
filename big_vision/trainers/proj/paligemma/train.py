@@ -35,7 +35,6 @@ from clu import parameter_overview
 import flax
 import flax.linen as nn
 import jax
-from jax.experimental import mesh_utils
 from jax.experimental import multihost_utils
 from jax.experimental.array_serialization import serialization as array_serial
 import jax.numpy as jnp
@@ -62,6 +61,8 @@ jax.config.parse_flags_with_absl()
 # cause slowdowns and memory fragmentation. Explicit transfers are done
 # with jax.device_put and jax.device_get.
 jax.config.update("jax_transfer_guard", "disallow")
+# Fixes design flaw in jax.random that may cause unnecessary d2d comms.
+jax.config.update("jax_threefry_partitionable", True)
 
 
 NamedSharding = jax.sharding.NamedSharding
@@ -91,6 +92,7 @@ def main(argv):
       f"\u001b[33mHello from process {jax.process_index()} holding "
       f"{jax.local_device_count()}/{jax.device_count()} devices and "
       f"writing to workdir {workdir}.\u001b[0m")
+  logging.info(f"The config:\n{config}")
 
   save_ckpt_path = None
   if workdir:  # Always create if requested, even if we may not write into it.
@@ -98,7 +100,7 @@ def main(argv):
     save_ckpt_path = os.path.join(workdir, "checkpoint.bv")
 
   # The pool is used to perform misc operations such as logging in async way.
-  pool = multiprocessing.pool.ThreadPool()
+  pool = multiprocessing.pool.ThreadPool(1)
 
   # Here we register preprocessing ops from modules listed on `pp_modules`.
   for m in config.get("pp_modules", ["ops_general", "ops_image", "ops_text"]):
@@ -132,20 +134,18 @@ def main(argv):
   # Sharding rules with the default of doing full data sharding.
   sharding_rules = config.get("sharding_rules", [("act_batch", "data")])
 
-  mesh_axes, mesh_size = tuple(zip(*config_mesh))
-
-  # Because jax.utils do not support `-1` shape size.
-  mesh_size = np.array(jax.devices()).reshape(mesh_size).shape
-
-  device_mesh = mesh_utils.create_device_mesh(
-      mesh_size, allow_split_physical_axes=config.get(
-          "mesh_allow_split_physical_axes", False))
+  write_note("Creating device mesh...")
+  mesh = u.create_device_mesh(
+      config_mesh,
+      allow_split_physical_axes=config.get("mesh_allow_split_physical_axes",
+                                           False))
+  repl_sharding = jax.sharding.NamedSharding(mesh, P())
 
   # Consistent device order is important to ensure correctness of various train
   # loop components, such as input pipeline, update step, evaluators. The
   # order prescribed by the `devices_flat` variable should be used throughout
   # the program.
-  devices_flat = device_mesh.flatten()
+  devices_flat = mesh.devices.flatten()
 
 ################################################################################
 #                                                                              #
@@ -244,10 +244,6 @@ def main(argv):
 #                    Init and/or load model onto devices                       #
 #                                                                              #
 ################################################################################
-
-  write_note("Creating device mesh...")
-  mesh = jax.sharding.Mesh(device_mesh, mesh_axes)
-  repl_sharding = jax.sharding.NamedSharding(mesh, P())
 
   write_note("Inferring shardings...")
   train_state_shape = {"params": params_shape, "opt": opt_shape}
@@ -461,7 +457,7 @@ def main(argv):
       u.chrono.tick(step)
       measure_per_dataset_times(step)
 
-      for k in ("training_loss", "l2_params", "l2_grads"):
+      for k in ("training_loss", "l2_grads", "l2_updates", "l2_params"):
         if not np.isfinite(measurements.get(k, 0.0)):
           raise RuntimeError(f"{k} became nan or inf somewhere within steps "
                              f"[{step - get_steps('log_training')}, {step}]")

@@ -63,8 +63,11 @@ def clip_by_per_example_global_norm(
   def update_fn(updates, state, params=None):
     del params
     grads_flat, grads_treedef = jax.tree_util.tree_flatten(updates)
+    batch_size = grads_flat[0].shape[0]
     clipped, _ = optax.per_example_global_norm_clip(grads_flat, max_norm)
-    return jax.tree_util.tree_unflatten(grads_treedef, clipped), state
+    grads_sum = jax.tree_util.tree_unflatten(grads_treedef, clipped)
+    grads_mean = jax.tree_util.tree_map(lambda x: x / batch_size, grads_sum)
+    return grads_mean, state
 
   return optax.GradientTransformation(init_fn, update_fn)
 

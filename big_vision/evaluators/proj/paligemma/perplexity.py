@@ -28,7 +28,7 @@ API = 'jit'
 # Cache the function such that it won't always recompile (in mean evaluator).
 @functools.cache
 def perplexity(
-    predict_fn, key='labels', shift_labels=True):
+    predict_fn, key='labels', shift_labels=True, pad_token=None):
   """Returns a function that computes perplexity."""
 
   def _perplexity_fn(train_state, batch, **kw):
@@ -36,6 +36,9 @@ def perplexity(
 
     labels = batch[key]
     weights = batch.get('mask_loss', jnp.ones_like(labels))
+
+    if pad_token is not None:
+      weights = weights * (labels != pad_token).astype(jnp.float32)
 
     if shift_labels:
       labels = labels[:, 1:]
@@ -53,6 +56,8 @@ def perplexity(
 class Evaluator(mean.Evaluator):
   """Perplexity evaluator."""
 
-  def __init__(self, predict_fn, *a, key='labels', shift_labels=False, **kw):
+  def __init__(self, predict_fn, *a,
+               key='labels', shift_labels=False, pad_token=None, **kw):
     kw.setdefault('prefetch', 0)  # More memory-saving default.
-    super().__init__(perplexity(predict_fn, key, shift_labels), *a, **kw)
+    super().__init__(
+        perplexity(predict_fn, key, shift_labels, pad_token), *a, **kw)

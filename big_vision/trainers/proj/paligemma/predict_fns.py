@@ -68,18 +68,19 @@ def _image_avg_repr(train_state, batch, *, model, key="img/pre_logits"):
 
 def _decode_with_logp(
     train_state, batch, *, model, devices, max_decode_len, eos_token,
-    best_of_n=1, sampler="greedy", replicate_out=False, eos_look_behind=0):
+    best_of_n=1, sampler="greedy", eos_look_behind=0):
   """Sample token continuations to the input sequences."""
   mesh = jax.sharding.Mesh(devices, ("devices",))
   replicate_sharding = jax.sharding.NamedSharding(mesh, P())
+  bs_shardable = len(batch["image"]) % jax.device_count() == 0
   out_sharding = jax.sharding.NamedSharding(
-      mesh, P() if replicate_out else P("devices")
+      mesh, P("devices") if bs_shardable else P()
   )
 
   # Prefill the model cache and generate logits for first token.
   logits, cache = jax.jit(
       _prefill_cache,
-      out_shardings=out_sharding,
+      out_shardings=(None, out_sharding),
       static_argnames=("model", "max_decode_len"),
   )(
       train_state["params"],
@@ -95,6 +96,10 @@ def _decode_with_logp(
 
   # Mask indicating real examples. False if example is used to pad the batch.
   mask = batch["_mask"]
+
+  # Mask indicating tokens for which the logits will be set to -Inf. Can be a
+  # Boolean mask or indices.
+  tok_mask = batch.get("mask_logits", None)
 
   # Repeat example in case we are picking the best of n.
   logits, cache, mask = jax.jit(
@@ -114,6 +119,7 @@ def _decode_with_logp(
   extend_cache = jax.jit(
       _extend_cache,
       donate_argnums=1,
+      out_shardings=(None, out_sharding),
       static_argnames=("model",),
   )
 
@@ -123,7 +129,7 @@ def _decode_with_logp(
   stops = collections.deque(maxlen=1 + eos_look_behind)
   for idx in range(max_decode_len):
     tokens, state = decode_sample_output(
-        state, logits, max_decode_len=max_decode_len, sampler=sampler
+        state, logits, tok_mask, max_decode_len=max_decode_len, sampler=sampler
     )
 
     if idx + 1 >= max_decode_len:
@@ -183,7 +189,7 @@ def _bon_select(state, *, n, eos_token):
   return state
 
 
-def _decode_sample_output(state, logits, *, max_decode_len, sampler):
+def _decode_sample_output(state, logits, tok_mask, *, max_decode_len, sampler):
   if state is None:
     # Decode state keeps track of sampled tokens and their logp.
     bs = logits.shape[0]
@@ -194,7 +200,8 @@ def _decode_sample_output(state, logits, *, max_decode_len, sampler):
     (seqlen, tokens, logp) = state
 
   # Sample tokens.
-  sampled_tokens, sampled_logp = _sample_logits(logits, sampler=sampler)
+  sampled_tokens, sampled_logp = _sample_logits(logits, sampler=sampler,
+                                                tok_mask=tok_mask)
 
   # Update state with sampled outputs.
   new_len = seqlen + 1
@@ -249,7 +256,7 @@ def _extend_cache(params, cache, tokens, *, model):
   return last_logits, variables["cache"]
 
 
-def _sample_logits(logits, sampler):
+def _sample_logits(logits, sampler, tok_mask=None):
   """Returns a sampled token and its logp from logits."""
   # Note: Consider making it possible for evaluators to pass rng seed to
   # decode functions. For now generate it from jax.lax and avoid evaluators
@@ -257,12 +264,21 @@ def _sample_logits(logits, sampler):
   rng = jax.random.PRNGKey(
       jax.lax.rng_uniform(0, np.iinfo(np.int32).max, tuple()))
 
+  masked_logits = logits
+  if tok_mask is not None:
+    masked_logits = masked_logits.at[..., tok_mask].set(-jnp.inf)
+
   # Use Registry to support specifying things like:
   #  "greedy", "nucleus(0.2)", "temperature(t=1.0)"
   sampled_tokens = registry.Registry.lookup("paligemma_sampler." + sampler)(
-      logits=logits, rng=rng)
+      logits=masked_logits, rng=rng)
 
   # Find the log probability (normalized logits) of selected tokens.
+  # NOTE: If you use tok_mask this returns the probability of the tokens while
+  # ignoring the masking. This is useful for pix2seq-style which has tokens like
+  # "noise" which it does not want to sample but it wants to use it to affect
+  # the score/logp of classes being sampled and it wants to intrepet as a
+  # confidence.
   sampled_logp = jnp.take_along_axis(
       jax.nn.log_softmax(logits, axis=-1),
       sampled_tokens[..., None], -1)[..., 0]
@@ -297,18 +313,19 @@ def _nucleus_sampling(p: float, t: float = 1.0, *, logits, rng):
 
 def _beam_decode(train_state, batch, *,
                  model, devices, max_decode_len,
-                 eos_token, beam_size, replicate_out=False):
+                 eos_token, beam_size):
   """Beam search (greedy/top-k exploration)."""
   mesh = jax.sharding.Mesh(devices, ("devices",))
   replicate_sharding = jax.sharding.NamedSharding(mesh, P())
+  bs_shardable = len(batch["image"]) % jax.device_count() == 0
   out_sharding = jax.sharding.NamedSharding(
-      mesh, P() if replicate_out else P("devices")
+      mesh, P("devices") if bs_shardable else P()
   )
 
   # Prefill the model cache and generate logits for first token.
   logits, cache = jax.jit(
       _prefill_cache,
-      out_shardings=out_sharding,
+      out_shardings=(None, out_sharding),
       static_argnames=("model", "max_decode_len"),
   )(
       train_state["params"],
@@ -327,6 +344,8 @@ def _beam_decode(train_state, batch, *,
 
   beam_sample_output = jax.jit(
       _beam_sample_output,
+      donate_argnums=2,
+      out_shardings=(None, None, out_sharding),
       static_argnames=("max_decode_len", "beam_size", "eos_token"),
   )
   beam_early_stop = jax.jit(
@@ -337,6 +356,7 @@ def _beam_decode(train_state, batch, *,
   extend_cache = jax.jit(
       _extend_cache,
       donate_argnums=1,
+      out_shardings=(None, out_sharding),
       static_argnames=("model",),
   )
 

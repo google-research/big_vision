@@ -103,7 +103,7 @@ def get_config(arg=None):
   # You probably do NOT want to add settings here. The `arg` way of settings is
   # really only for things you'd want to sweep and which affect MULTIPLE config
   # settings at once or go into the pp string.
-  c = bvcc.parse_arg(arg, res=224, text_len=128, batch_size=32,
+  c = bvcc.parse_arg(arg, res=224, size='3b', text_len=128, batch_size=32,
                      freeze_vit=False, freeze_llm=False,
                      run_local=False)
 
@@ -134,7 +134,17 @@ def get_config(arg=None):
   c.model = {}
   c.model.img = dict(variant='So400m/14', pool_type='none', scan=True)
   c.model.llm = dict(vocab_size=256_000 + 1024 + 128, dropout=0.0)
-  c.model_init = f'pt_{c.res}'
+  if not c.size:
+    # PaliGemma
+    c.model.llm.variant = 'gemma_2b'
+    c.model_init = f'pt_{c.res}'
+  else:
+    # PaliGemma 2
+    c.model.llm.variant = (
+        'gemma2_' + {'3b': '2b', '10b': '9b', '28b': '27b'}[c.size]
+    )
+    c.model_init = f'pt_{c.size}_{c.res}'
+    c.model.llm.final_logits_softcap = 0.0  # Better for transfer.
 
   # FSDP strategy.
   c.mesh = [('data', -1)]
