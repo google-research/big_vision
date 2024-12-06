@@ -21,7 +21,6 @@
 from typing import Dict, Optional, List, Union
 
 from flax import traverse_util
-import grain.tensorflow as tf_grain
 import tensorflow as tf
 
 AUTOTUNE = tf.data.experimental.AUTOTUNE
@@ -75,39 +74,4 @@ def pack_dataset(
   Returns:
     A `tf.data.Dataset`.
   """
-  def _maybe_join(k):
-    if isinstance(k, int):
-      k = (k,)
-    return FLATTEN_SEPARATOR.join(k)
-
-  if isinstance(key2length, int):
-    key2length = {_maybe_join(k): key2length for k in keys}
-  else:
-    key2length = dict(key2length)  # Make new dict, we'll edit in-place.
-
-  def _add_fake_index(x):
-    x = dict(x)
-    x[tf_grain.INDEX] = -1
-    return x
-
-  def _flatten_dict(x):
-    return traverse_util.flatten_dict(x, sep=FLATTEN_SEPARATOR)
-
-  def _unflatten_dict(x):
-    return traverse_util.unflatten_dict(x, sep=FLATTEN_SEPARATOR)
-
-  def _remove_index(x):
-    x = dict(x)
-    x.pop(tf_grain.INDEX)
-    return x
-
-  pack_op = tf_grain.TfBatchAndPack(
-      batch_size=batch_size or 1,
-      sequence_lengths=_flatten_dict(key2length))
-
-  dataset = dataset.map(_add_fake_index, num_parallel_calls=AUTOTUNE)
-  dataset = dataset.map(_flatten_dict, num_parallel_calls=AUTOTUNE)
-  dataset = pack_op.apply_to_dataset(dataset)
-  dataset = dataset.map(_unflatten_dict, num_parallel_calls=AUTOTUNE)
-  dataset = dataset.map(_remove_index, num_parallel_calls=AUTOTUNE)
-  return dataset.unbatch()
+  raise ValueError("Not implemented in OSS yet.")
