@@ -255,8 +255,7 @@ export KAGGLE_USERNAME=
 export KAGGLE_KEY=
 
 # See https://www.kaggle.com/models/google/paligemma-2 for a full list of models.
-export MODEL_NAME=paligemma-2
-export CKPT_FILE=paligemma2-3b-pt-224.npz.b16
+export MODEL_NAME=paligemma2-3b-pt-224
 
 mkdir ckpts/
 cd ckpts/
@@ -264,7 +263,7 @@ cd ckpts/
 # Store as a "vanity name" from models/proj/paligemma/paligemma.py
 curl -L -u $KAGGLE_USERNAME:$KAGGLE_KEY\
   -o pt_3b_224.bf16.npz \
-  https://www.kaggle.com/api/v1/models/google/paligemma-2/jax/$MODEL_NAME/1/download/$CKPT_FILE
+  https://www.kaggle.com/api/v1/models/google/paligemma-2/jax/$MODEL_NAME/1/download/$MODEL_NAME.b16.npz
 ```
 
 As an example, we provide the `forkme.py` config that is based on the easily-adjustable jsonl data source:
