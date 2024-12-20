@@ -12,7 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Jet: A Modern Transformer-Based Normalizing Flow."""
+"""Jet: A Modern Transformer-Based Normalizing Flow.
+
+https://arxiv.org/abs/2412.15129
+"""
 
 import itertools
 from typing import Any, Sequence
@@ -29,7 +32,7 @@ import numpy as np
 
 
 class DNN(nn.Module):
-  """Main non-invertible compute block, used inside coupling layers."""
+  """Main non-invertible compute block with a ViT used in coupling layers."""
 
   depth: int = 1
   emb_dim: int = 256

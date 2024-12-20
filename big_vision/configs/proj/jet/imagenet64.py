@@ -13,7 +13,7 @@
 # limitations under the License.
 
 # pytype: disable=attribute-error,line-too-long
-r"""JetFormer for imagenet64.
+r"""Jet config for imagenet64.
 
 Expected values in imagenet64 (200 epochs):
   - 32 couplings and block depth 2: 3.72 bpd
