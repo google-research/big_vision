@@ -12,10 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Training loop example.
-
-This is a basic variant of a training loop, good starting point for fancy ones.
-"""
+"""Training loop for Jet."""
 # pylint: disable=consider-using-from-import
 # pylint: disable=logging-fstring-interpolation
 
