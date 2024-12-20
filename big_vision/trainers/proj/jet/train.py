@@ -33,16 +33,18 @@ import big_vision.optax as bv_optax
 import big_vision.sharding as bv_sharding
 import big_vision.utils as u
 from clu import parameter_overview
+import distrax
 import flax.linen as nn
 import jax
+from jax.experimental import mesh_utils
 from jax.experimental import multihost_utils
 from jax.experimental.array_serialization import serialization as array_serial
-from jax.experimental.shard_map import shard_map
 import jax.numpy as jnp
 from ml_collections import config_flags
 import numpy as np
 import optax
 import tensorflow as tf
+
 
 from tensorflow.io import gfile
 
@@ -93,7 +95,6 @@ def main(argv):
       f"\u001b[33mHello from process {jax.process_index()} holding "
       f"{jax.local_device_count()}/{jax.device_count()} devices and "
       f"writing to workdir {workdir}.\u001b[0m")
-  logging.info(f"The config:\n{config}")
 
   save_ckpt_path = None
   if workdir:  # Always create if requested, even if we may not write into it.
@@ -101,7 +102,7 @@ def main(argv):
     save_ckpt_path = os.path.join(workdir, "checkpoint.bv")
 
   # The pool is used to perform misc operations such as logging in async way.
-  pool = multiprocessing.pool.ThreadPool(1)
+  pool = multiprocessing.pool.ThreadPool()
 
   # Here we register preprocessing ops from modules listed on `pp_modules`.
   for m in config.get("pp_modules", ["ops_general", "ops_image", "ops_text"]):
@@ -135,18 +136,21 @@ def main(argv):
   # Sharding rules with default
   sharding_rules = config.get("sharding_rules", [("act_batch", "data")])
 
-  write_note("Creating device mesh...")
-  mesh = u.create_device_mesh(
-      config_mesh,
+  mesh_axes, mesh_size = tuple(zip(*config_mesh))
+
+  # Because jax.utils do not support `-1` shape size.
+  mesh_size = np.array(jax.devices()).reshape(mesh_size).shape
+
+  device_mesh = mesh_utils.create_device_mesh(
+      mesh_size,
       allow_split_physical_axes=config.get("mesh_allow_split_physical_axes",
                                            False))
-  repl_sharding = jax.sharding.NamedSharding(mesh, P())
 
   # Consistent device order is important to ensure correctness of various train
   # loop components, such as input pipeline, update step, evaluators. The
   # order presribed by the `devices_flat` variable should be used throughout
   # the program.
-  devices_flat = mesh.devices.flatten()
+  devices_flat = device_mesh.flatten()
 
 ################################################################################
 #                                                                              #
@@ -189,20 +193,15 @@ def main(argv):
 
   write_note("Creating model...")
   model_mod = importlib.import_module(f"big_vision.models.{config.model_name}")
-  model = model_mod.Model(
-      num_classes=config.num_classes, **config.get("model", {}))
+  model = model_mod.Model(**config.get("model", {}))
 
-  def init(rng):
-    batch = jax.tree.map(lambda x: jnp.zeros(x.shape, x.dtype.as_numpy_dtype),
-                         train_ds.element_spec)
-    params = model.init(rng, batch["image"])["params"]
-
-    # Set bias in the head to a low value, such that loss is small initially.
-    if "init_head_bias" in config:
-      params["head"]["bias"] = jnp.full_like(params["head"]["bias"],
-                                             config["init_head_bias"])
-
-    return params
+  first_batch = next(train_iter)
+  def init(rng, batch):
+    context = batch["label"][:, None] if "label" in batch else None
+    return model.init(rng,
+                      batch["image"],
+                      context=context,
+                      method=model.forward)["params"]
 
   # This seed makes the Jax part of things (like model init) deterministic.
   # However, full training still won't be deterministic, for example due to the
@@ -212,7 +211,7 @@ def main(argv):
 
   write_note("Inferring parameter shapes...")
   rng, rng_init = jax.random.split(rng)
-  params_shape = jax.eval_shape(init, rng_init)
+  params_shape = jax.eval_shape(init, rng_init, first_batch)
 
   write_note("Inferring optimizer state shapes...")
   tx, sched_fns = bv_optax.make(config, nn.unbox(params_shape), sched_kw=dict(
@@ -231,6 +230,10 @@ def main(argv):
 #                                                                              #
 ################################################################################
 
+  write_note("Creating device mesh...")
+  mesh = jax.sharding.Mesh(device_mesh, mesh_axes)
+  repl_sharding = jax.sharding.NamedSharding(mesh, P())
+
   write_note("Inferring shardings...")
   train_state_shape = {"params": params_shape, "opt": opt_shape}
 
@@ -244,7 +247,8 @@ def main(argv):
   rng_init = u.reshard(rng_init, repl_sharding)
 
   # Parameters and the optimizer are now global (distributed) jax arrays.
-  params = jax.jit(init, out_shardings=train_state_sharding["params"])(rng_init)
+  params = jax.jit(init, out_shardings=train_state_sharding["params"])(
+      rng_init, first_batch)
   opt = jax.jit(tx.init, out_shardings=train_state_sharding["opt"])(params)
 
   rng, rng_loop = jax.random.split(rng, 2)
@@ -268,6 +272,21 @@ def main(argv):
 #                                                                              #
 ################################################################################
 
+  def _bits_per_dim(logits, logdet, dim_count, reduce=True):
+    normal = distrax.Normal(0.0, 1.0)
+    nll = -normal.log_prob(logits)
+    nll = jnp.sum(nll + np.log(127.5), axis=range(1, nll.ndim))
+
+    bits = nll - logdet
+
+    reduce_fn = jnp.mean if reduce else lambda x: x
+    normalizer = np.log(2) * dim_count
+
+    logging.info("nll: %s", nll.shape)
+    return (reduce_fn(bits) / normalizer,
+            reduce_fn(nll) / normalizer,
+            reduce_fn(logdet) / normalizer)
+
   @functools.partial(
       jax.jit,
       donate_argnums=(0,),
@@ -275,36 +294,38 @@ def main(argv):
   def update_fn(train_state, rng, batch):
     """Update step."""
 
-    images, labels = batch["image"], batch["labels"]
-
     step_count = bv_optax.get_count(train_state["opt"], jittable=True)
     rng = jax.random.fold_in(rng, step_count)
 
-    if config.get("mixup") and config.mixup.p:
-      # The shard_map below makes mixup run on every device independently and
-      # thus avoids unnecessary communication.
-      sharded_mixup_fn = shard_map(
-          u.get_mixup(rng, config.mixup.p),
-          mesh=jax.sharding.Mesh(devices_flat, ("data",)),
-          in_specs=P("data"), out_specs=(P(), P("data"), P("data")))
-      rng, (images, labels), _ = sharded_mixup_fn(images, labels)
-
-    # Get device-specific loss rng.
-    rng, rng_model = jax.random.split(rng, 2)
+    rng_input, rng_model, rng_cond_drop = jax.random.split(rng, 3)
+    images = (batch["image"] +
+              jax.random.uniform(
+                  rng_input,
+                  shape=batch["image"].shape,
+                  minval=0.0,
+                  maxval=1.0 / 127.5))
 
     def loss_fn(params):
-      logits, _ = model.apply(
+      context = None
+      if "label" in batch:
+        drop = (config.get("condition_drop_prob", 0.1) >
+                jax.random.uniform(rng_cond_drop, (), jnp.float32))
+        context = batch["label"][:, None] * (~drop)
+      logits, logdet = model.apply(
           {"params": params}, images,
-          train=True, rngs={"dropout": rng_model})
-      return getattr(u, config.get("loss", "sigmoid_xent"))(
-          logits=logits, labels=labels)
+          rngs={"dropout": rng_model},
+          context=context,
+          method=model.forward)
+      bits, nll, logdet = _bits_per_dim(logits, logdet,
+                                        np.prod(images.shape[1:]))
+      return bits, {"bits": bits, "nll": nll, "logdet": logdet}
 
     params, opt = train_state["params"], train_state["opt"]
-    loss, grads = jax.value_and_grad(loss_fn)(params)
+    (loss, extra), grads = jax.value_and_grad(loss_fn, has_aux=True)(params)
     updates, opt = tx.update(grads, opt, params)
     params = optax.apply_updates(params, updates)
 
-    measurements = {"training_loss": loss}
+    measurements = {"training_loss": loss, **extra}
     gs = jax.tree.leaves(bv_optax.replace_frozen(config.schedule, grads, 0.))
     measurements["l2_grads"] = jnp.sqrt(sum([jnp.sum(g * g) for g in gs]))
     ps = jax.tree.leaves(params)
@@ -377,19 +398,20 @@ def main(argv):
   # We do not jit/pmap this function, because it is passed to evaluator that
   # does it later. We output as many intermediate tensors as possible for
   # maximal flexibility. Later `jit` will prune out things that are not needed.
-  def eval_logits_fn(train_state, batch):
-    logits, out = model.apply({"params": train_state["params"]}, batch["image"])
-    return logits, out
-
   def eval_loss_fn(train_state, batch):
-    logits, _ = model.apply({"params": train_state["params"]}, batch["image"])
-    loss_fn = getattr(u, config.get("loss", "sigmoid_xent"))
-    return {
-        "loss": loss_fn(logits=logits, labels=batch["labels"], reduction=False)
-    }
+    noise = jax.lax.rng_uniform(0.0, 1.0, batch["image"].shape) / 127.5
+    logits, logdet = model.apply(
+        {"params": train_state["params"]},
+        batch["image"] + noise,
+        context=batch["label"][:, None] if "label" in batch else None,
+        method=model.forward)
+    bits, nll, logdet = _bits_per_dim(
+        logits, logdet,
+        np.prod(batch["image"].shape[1:]),
+        reduce=False)
+    return {"bits": bits, "nll": nll, "logdet": logdet}
 
   eval_fns = {
-      "predict": eval_logits_fn,
       "loss": eval_loss_fn,
   }
 
@@ -455,14 +477,12 @@ def main(argv):
       for name, value in measurements.items():
         mw.measure(name, value)
       u.chrono.tick(step)
-      for k in ("training_loss", "l2_grads", "l2_updates", "l2_params"):
-        if not np.isfinite(measurements.get(k, 0.0)):
-          raise RuntimeError(f"{k} became nan or inf somewhere within steps "
-                             f"[{step - get_steps('log_training')}, {step}]")
+      if not np.isfinite(measurements["training_loss"]):
+        raise RuntimeError(f"The loss became nan or inf somewhere within steps "
+                           f"[{step - get_steps('log_training')}, {step}]")
 
     # Checkpoint saving
-    keep_last = total_steps if get_steps("ckpt", None) else None
-    keep_ckpt_steps = get_steps("keep_ckpt", None) or keep_last
+    keep_ckpt_steps = get_steps("keep_ckpt", None) or total_steps
     if save_ckpt_path and (
         (keep := u.itstime(step, keep_ckpt_steps, total_steps, first=False))
         or u.itstime(step, get_steps("ckpt", None), total_steps, first=True)

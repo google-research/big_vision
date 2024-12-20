@@ -234,14 +234,17 @@ def get_pad_to_shape(shape, pad_value=0, where="after"):
 
 
 @Registry.register("preprocess_ops.flatten")
-def get_flatten():
+def get_flatten(keys=None):
   """Flattens the keys of data with separator '/'."""
 
-  def flatten(data):
-    flat, _ = bv_utils.tree_flatten_with_names(data)
-    return dict(flat)
+  def _flatten(data):
+    flatten_keys = keys or list(data.keys())
+    not_flattened = {k: v for k, v in data.items() if k not in flatten_keys}
+    flattened = {k: v for k, v in data.items() if k in flatten_keys}
+    flattened, _ = bv_utils.tree_flatten_with_names(flattened)
+    return {**dict(flattened), **not_flattened}
 
-  return flatten
+  return _flatten
 
 
 @Registry.register("preprocess_ops.reshape")
