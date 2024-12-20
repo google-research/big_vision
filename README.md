@@ -69,6 +69,10 @@ codebase:
   Resources: [readme](big_vision/configs/proj/givt/README.md), [config](big_vision/configs/proj/givt/givt_imagenet2012.py), [colab](https://colab.research.google.com/github/google-research/big_vision/blob/main/big_vision/configs/proj/givt/givt_demo_colab.ipynb).
 - [Unified Auto-Encoding with Masked Diffusion](https://arxiv.org/abs/2406.17688), by
   Philippe Hansen-Estruch, Sriram Vishwanath, Amy Zhang, Manan Tomar.
+- [Jet: A Modern Transformer-Based Normalizing Flow](https://arxiv.org/abs/2412.15129), by
+  Alexander Kolesnikov*, André Susano Pinto*, Michael Tschannen*, [configs](big_vision/configs/proj/jet)
+- [JetFormer: An autoregressive generative model of raw images and text](https://arxiv.org/abs/2411.19722), by
+  Michael Tschannen*, André Susano Pinto*, Alexander Kolesnikov*.
 
 
 ### Multimodal research
@@ -77,7 +81,7 @@ codebase:
   Xiaohua Zhai*, Xiao Wang*, Basil Mustafa*, Andreas Steiner*, Daniel Keysers,
   Alexander Kolesnikov, and Lucas Beyer*\
   Resources: [trainer](big_vision/trainers/proj/image_text/contrastive.py), [config](big_vision/configs/proj/image_text/lit_coco.py), [colab](https://colab.research.google.com/github/google-research/big_vision/blob/main/big_vision/configs/proj/image_text/lit.ipynb).
-- [Image-and-Language Understanding from Pixels Only](https://arxiv.org/abs/2212.08045), by
+- [CLIPPO: Image-and-Language Understanding from Pixels Only](https://arxiv.org/abs/2212.08045), by
   Michael Tschannen, Basil Mustafa, Neil Houlsby\
   Resources: [readme](big_vision/configs/proj/clippo/README.md), [config](big_vision/configs/proj/clippo/train_clippo.py), [colab](https://colab.research.google.com/github/google-research/big_vision/blob/main/big_vision/configs/proj/clippo/clippo_colab.ipynb).
 - [Sigmoid Loss for Language Image Pre-Training](https://arxiv.org/abs/2303.15343), by
