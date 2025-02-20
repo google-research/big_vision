@@ -476,5 +476,27 @@ VANITY_NAMES = {
     "SigLIP So400m/14 224": "gs://big_vision/siglip/webli_en_so400m_224_57633886.npz:img",
     "SigLIP So400m/14 384": "gs://big_vision/siglip/webli_en_so400m_384_58765454.npz:img",
     "SigLIP B/16-i18n 256": "gs://big_vision/siglip/webli_i18n_b16_256_66117334.npz:img",
+
+    # SigLIP 2 image encoder checkpoints
+    "SigLIP2 B/16 224": "gs://big_vision/siglip2/siglip2_b16_224.npz:img",
+    "SigLIP2 B/16 256": "gs://big_vision/siglip2/siglip2_b16_256.npz:img",
+    "SigLIP2 B/16 384": "gs://big_vision/siglip2/siglip2_b16_384.npz:img",
+    "SigLIP2 B/16 512": "gs://big_vision/siglip2/siglip2_b16_512.npz:img",
+    "SigLIP2 B/32 256": "gs://big_vision/siglip2/siglip2_b32_256.npz:img",
+    "SigLIP2 L/16 256": "gs://big_vision/siglip2/siglip2_l16_256.npz:img",
+    "SigLIP2 L/16 384": "gs://big_vision/siglip2/siglip2_l16_384.npz:img",
+    "SigLIP2 L/16 512": "gs://big_vision/siglip2/siglip2_l16_512.npz:img",
+    "SigLIP2 So400m/14 224": "gs://big_vision/siglip2/siglip2_so400m14_224.npz:img",
+    "SigLIP2 So400m/14 384": "gs://big_vision/siglip2/siglip2_so400m14_384.npz:img",
+    "SigLIP2 So400m/16 256": "gs://big_vision/siglip2/siglip2_so400m16_256.npz:img",
+    "SigLIP2 So400m/16 384": "gs://big_vision/siglip2/siglip2_so400m16_384.npz:img",
+    "SigLIP2 So400m/16 512": "gs://big_vision/siglip2/siglip2_so400m16_512.npz:img",
+    "SigLIP2 g-opt/16 256": "gs://big_vision/siglip2/siglip2_g-opt16_256.npz:img",
+    "SigLIP2 g-opt/16 384": "gs://big_vision/siglip2/siglip2_g-opt16_384.npz:img",
+    # SigLIP 2 NaFlex image encoder checkpoints.
+    # These need `proj.image_text.naflex_vit.py` as the image encoder model
+    # and a non-standard preprocessing, see configs/proj/image_text/README_siglip2.md.
+    "SigLIP2 B/16 NaFlex": "gs://big_vision/siglip2/siglip2_b16_naflex.npz:img",
+    "SigLIP2 So400m/16 NaFlex": "gs://big_vision/siglip2/siglip2_so400m16_naflex.npz:img",
     # pylint: enable=line-too-long
 }
