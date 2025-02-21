@@ -104,7 +104,7 @@ codebase:
     [transfer configs](big_vision/configs/proj/paligemma/transfers),
     [datasets](big_vision/datasets),
     [CountBenchQA](big_vision/datasets/countbenchqa/data/countbench_paired_questions.json).
-- [SigLIP 2: Multilingual Vision-Language Encoders with Improved Semantic Understanding, Localization, and Dense Features](TODO), by *wow many authors*.\
+- [SigLIP 2: Multilingual Vision-Language Encoders with Improved Semantic Understanding, Localization, and Dense Features](https://arxiv.org/abs/2502.14786), by *wow many authors*.\
   Resources: [readme (with checkpoints)](big_vision/configs/proj/image_text/README_siglip2.md), [colab](https://colab.research.google.com/github/google-research/big_vision/blob/main/big_vision/configs/proj/image_text/SigLIP2_demo.ipynb).
 
 ### Training

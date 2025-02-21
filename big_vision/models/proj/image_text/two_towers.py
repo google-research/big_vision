@@ -151,7 +151,7 @@ VANITY_NAMES = {
     "SigLIP So400m/14 384": "gs://big_vision/siglip/webli_en_so400m_384_58765454.npz",
     "SigLIP B/16-i18n 256": "gs://big_vision/siglip/webli_i18n_b16_256_66117334.npz",
 
-    # SigLIP 2 image and text encoder checkpoints
+    # SigLIP 2 image and text encoder checkpoints from https://arxiv.org/abs/2502.14786
     "SigLIP2 B/16 224": "gs://big_vision/siglip2/siglip2_b16_224.npz",
     "SigLIP2 B/16 256": "gs://big_vision/siglip2/siglip2_b16_256.npz",
     "SigLIP2 B/16 384": "gs://big_vision/siglip2/siglip2_b16_384.npz",
