@@ -2,7 +2,7 @@
 
 This codebase is designed for training large-scale vision models using
 [Cloud TPU VMs](https://cloud.google.com/blog/products/compute/introducing-cloud-tpu-vms)
-or GPU machines. It is based on [Jax](https://github.com/google/jax)/[Flax](https://github.com/google/flax)
+or GPU machines. It is based on [Jax](https://github.com/jax-ml/jax)/[Flax](https://github.com/google/flax)
 libraries, and uses [tf.data](https://www.tensorflow.org/guide/data) and
 [TensorFlow Datasets](https://www.tensorflow.org/datasets) for scalable and
 reproducible input pipelines.
@@ -72,7 +72,7 @@ codebase:
 - [Jet: A Modern Transformer-Based Normalizing Flow](https://arxiv.org/abs/2412.15129), by
   Alexander Kolesnikov*, André Susano Pinto*, Michael Tschannen*, [configs](big_vision/configs/proj/jet)
 - [JetFormer: An autoregressive generative model of raw images and text](https://arxiv.org/abs/2411.19722), by
-  Michael Tschannen*, André Susano Pinto*, Alexander Kolesnikov*.
+  Michael Tschannen*, André Susano Pinto*, Alexander Kolesnikov*. [configs](big_vision/configs/proj/jetformer).
 
 
 ### Multimodal research
@@ -237,7 +237,7 @@ pip3 install --upgrade "jax[cuda]" -f https://storage.googleapis.com/jax-release
 
 You may need a different `jax` package, depending on CUDA and cuDNN libraries
 installed on your machine. Please consult
-[official jax documentation](https://github.com/google/jax#pip-installation-gpu-cuda)
+[official jax documentation](https://github.com/jax-ml/jax#pip-installation-gpu-cuda)
 for more information.
 
 ## Preparing tfds data
