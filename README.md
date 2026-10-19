@@ -1,5 +1,7 @@
 # Big Vision
 
+[English](README.md) | [简体中文](README.zh.md)
+
 This codebase is designed for training large-scale vision models using
 [Cloud TPU VMs](https://cloud.google.com/blog/products/compute/introducing-cloud-tpu-vms)
 or GPU machines. It is based on [Jax](https://github.com/jax-ml/jax)/[Flax](https://github.com/google/flax)
