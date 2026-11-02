@@ -351,7 +351,7 @@ gcloud compute tpus tpu-vm ssh $NAME --zone=$ZONE --worker=0 --command "TFDS_DAT
 You can then copy the datasets to GS bucket, to make them accessible to all TPU workers.
 
 ```
-gcloud compute tpus tpu-vm ssh $NAME --zone=$ZONE --worker=0 --command "rm -r ~/tensorflow_datasets/downloads && gsutil cp -r ~/tensorflow_datasets gs://$GS_BUCKET_NAME"
+gcloud compute tpus tpu-vm ssh $NAME --zone=$ZONE --worker=0 --command "rm -r ~/tensorflow_datasets/downloads && gcloud storage cp --recursive ~/tensorflow_datasets gs://$GS_BUCKET_NAME"
 ```
 
 If you want to integrate other public or custom datasets, i.e. imagenet2012,
@@ -439,7 +439,7 @@ copy the result to you google cloud bucket:
 
 ```
 gcloud compute ssh $NAME_CPU_HOST --zone=$ZONE --command "cd big_vision && TFDS_DATA_DIR=/mnt/disks/tfds/tensorflow_datasets bash big_vision/run_tpu.sh big_vision.tools.download_tfds_datasets coco_captions"
-gcloud compute ssh $NAME_CPU_HOST --zone=$ZONE --command "rm -rf /mnt/disks/tfds/tensorflow_datasets/downloads && gsutil cp -r /mnt/disks/tfds/tensorflow_datasets gs://$GS_BUCKET_NAME"
+gcloud compute ssh $NAME_CPU_HOST --zone=$ZONE --command "rm -rf /mnt/disks/tfds/tensorflow_datasets/downloads && gcloud storage cp --recursive /mnt/disks/tfds/tensorflow_datasets gs://$GS_BUCKET_NAME"
 ```
 
 
